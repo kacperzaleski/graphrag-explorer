@@ -1,0 +1,25 @@
+services:
+  neo4j:
+    # 5.26 is the 5.x LTS release; native vector indexes exist since 5.11
+    image: neo4j:5.26-community
+    ports:
+      - "7474:7474" # browser UI: http://localhost:7474
+      - "7687:7687" # bolt protocol (what the Python driver speaks)
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-graphrag-dev-password}
+      # small corpus: keep memory modest so it runs next to the rest of the stack on a laptop
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 512m
+    volumes:
+      - neo4j_data:/data # graph survives `docker compose down` (use `down -v` to wipe it)
+    healthcheck:
+      # "healthy" = the database actually answers a query, not just that the port is open
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  neo4j_data:

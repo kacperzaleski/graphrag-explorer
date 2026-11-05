@@ -1,0 +1,26 @@
+# secrets: only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# data and caches (raw docs are re-downloadable, LLM cache is local cost-saving state)
+data/raw/*
+!data/raw/.gitkeep
+.cache/
+
+# frontend
+node_modules/
+frontend/dist/
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,28 @@
+[project]
+name = "graphrag-explorer"
+version = "0.1.0"
+description = "Documents -> knowledge graph -> hybrid graph + vector retrieval -> FastAPI -> React explorer"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "neo4j>=5.26",              # official driver, has an async API
+    "openai>=1.40",             # OpenAI-compatible client: Gemini, Cerebras, Mistral, Groq
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",   # typed config from .env / environment
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.uv]
+package = false  # an app, not a library: run with `python -m backend.<module>` from the repo root
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
