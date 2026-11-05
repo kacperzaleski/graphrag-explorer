@@ -30,7 +30,9 @@ Rules:
 - Use only facts from the context; no outside knowledge, no guessing.
 - Prefer passages as evidence; graph facts show how entities connect (useful for multi-hop \
 questions), but cite the passages that support them.
-- If the context does not contain the answer, say so and set found_in_context to false.
+- If the context links the entities in the question through intermediate entities (e.g. both
+owned the same bank, one owned the other's parent), describe that chain step by step: that IS the
+answer. Say the information is missing (found_in_context false) only if no such chain exists.
 - cited_chunks: ids of the passages you used. used_edges: ids of the graph facts you used.
 - In the answer text, cite passages inline like [bawag#003]."""
 
@@ -73,6 +75,7 @@ class AnswerResult:
     cached: bool = False
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    llm_seconds: float = 0.0  # of the original call, also when served from cache
 
 
 def build_messages(question: str, chunks: list[Hit], edges: list[Edge]) -> list[dict]:
@@ -101,6 +104,7 @@ async def generate_answer(llm: LLM, question: str, chunks: list[Hit],
     result.model, result.cached = completion.model, completion.cached
     result.prompt_tokens, result.completion_tokens = (completion.prompt_tokens,
                                                       completion.completion_tokens)
+    result.llm_seconds = completion.seconds
     return result
 
 

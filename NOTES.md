@@ -693,3 +693,177 @@ Run: `cd frontend && npm install && npm run dev` → http://localhost:5173 (API 
 the full graph, so it scales with *what is on screen*, not with graph size. The server-side limits (neighbours per
 expand, path length) keep each request bounded. For overview at scale: precomputed aggregates (community-level
 graph, one node per community) and server-side layout, or WebGL rendering (sigma.js) for big overview maps.
+
+### Phase 4 quiz: model answers
+**Q1: Why never load the full graph?**
+- *User:* 726 nodes and 585 edges drawn at once are a "hairball". Nobody can read structure or find a fact in
+  it (cognitive overload). Exploration works as **overview first, zoom and filter, details on demand**: the
+  insights give the overview, expanding gives the local context, and the entity card gives the details.
+- *Technical:* force-directed layouts are roughly O(n²) per iteration (every pair of nodes repels), so they get
+  slow in the browser. You'd also transfer and render data nobody looks at. The server queries stay bounded
+  (limits per expand), so the UI scales with *what is on screen*, not with graph size.
+
+**Q2: Why is PageRank computed on *reversed* ownership edges?** PageRank mass flows **along** edge direction
+and accumulates at nodes that many (important) nodes point **to**. On `owner → owned`, the score would pile up at
+the *owned* end: subsidiaries at the bottom of long chains, or companies with many shareholders. That's the
+"most-owned" entities, the opposite of what we want. Reversing to `owned → owner` makes mass flow up the
+chains to **ultimate controllers**: an owner scores high when it owns things that are themselves important or own
+a lot (indirect control).
+
+**Q3: Why ignore late type-ahead responses?** It's a **race condition**. The user types "ra", pauses, and request 1
+goes out. Then "raif", and request 2. Network latency varies, so response 1 can arrive **after** response 2 and
+overwrite the dropdown with results for "ra" while the box shows "raif". Debouncing only reduces *how many*
+requests are sent; it doesn't control *the order in which responses arrive*. Two requests can still be in flight
+whenever the user pauses longer than 250 ms. Fix: a request counter (only the latest may set state), or cancel
+older requests with `AbortController`.
+
+---
+
+## Phase 5: Evaluation (`eval/`)
+
+Run: `JUDGE_PROVIDER=groq uv run python -m eval.run` → `eval/results.md` (+ `eval/runs/latest.jsonl`).
+Retrieval only, no LLM: `--retrieval-only`. Smoke test: `--limit 3`.
+
+### Question set (`eval/questions.jsonl`, 28 questions)
+- **13 multi-hop, 10 lookup, 5 corpus-wide.** Each has a reference answer, expected entities and gold chunk IDs.
+- **Built from the text, not from the graph** (`eval/build_questions.py`). This is the most important design
+  decision of the eval:
+  - If questions were generated from the extracted graph, graph mode would be graded on its own data:
+    **circular evaluation / leakage**, a guaranteed win that measures nothing. It could also never test facts the
+    extraction *missed*.
+  - Instead: a passage of article A mentions the subject of article B (string match on article titles and curated
+    aliases, with no graph involved). An LLM sees both passages and writes a question that needs a fact from each,
+    ideally describing the bridge entity instead of naming it ("the firm founded by Steve Feinberg").
+    Gold = both passages.
+  - Lookups are generated from single passages. Corpus-wide questions are written by hand, with gold chunks found by
+    text search (`grep` for "Significant Institution", "nationalis", "Czech"…).
+- **Semi-automatic, then human review**: 28 drafts were generated, and I dropped multi-hop drafts that one
+  passage alone could answer (not really multi-hop), duplicates, and odd phrasings. 11 of 18 multi-hop drafts
+  survived, and 2 hand-written "how is A connected to B" questions (the app's main use case) were added.
+- Limitations to state openly:
+  - n = 28 is small, so confidence intervals are wide.
+  - Questions are written by an LLM that saw the passages, so they tend to reuse the passages' wording, which
+    favours *lexical and vector* retrieval (real users phrase things differently).
+  - Overlapping chunks: a fact can also sit in the neighbouring chunk (64-token overlap), so recall can slightly
+    undercount.
+  - Corpus-wide gold sets are incomplete by nature.
+
+### Metrics
+| Metric | What it measures | Why |
+|---|---|---|
+| **recall@8** | share of gold passages among the 8 passages the LLM sees | retrieval quality, no LLM needed |
+| **complete@8** | 1 if *all* gold passages are among them | multi-hop needs every hop's evidence; partial recall isn't enough |
+| **judge score** | correct 1 / partial 0.5 / incorrect 0, by an LLM judge against the reference | end-to-end answer quality |
+| **entity recall** | share of expected entities mentioned in the answer (alias-aware) | deterministic, free cross-check of the judge |
+| latency, tokens | p50 of the retrieval time and the LLM time; tokens per question | the cost side of the trade-off |
+
+### LLM-as-a-judge, and its biases
+- **Judge ≠ answer model**: answers come from Gemini, the judge is Groq `gpt-oss-120b` (another vendor and model family),
+  against **self-preference bias** (models rate their own family's outputs higher).
+- **Verbosity bias**: the prompt says to ignore length, style and citations, and to judge facts only.
+- **Position bias**: not applicable; one answer is judged at a time against a reference (no pairwise A/B).
+- **Reasoning before the verdict** in the schema (`reasoning` field first): the label is conditioned on an
+  explicit comparison, which improves consistency (a form of chain of thought).
+- **Calibration**: 10 answers labelled by hand → agreement and **Cohen's κ**. κ corrects for chance:
+  if both raters say "correct" 80% of the time, they agree 68% of the time by pure chance. Rough reading:
+  > 0.8 almost perfect, 0.6–0.8 substantial, 0.4–0.6 moderate.
+- Cached answers keep the **original** latency and tokens (stored in the cache entry), so a re-run of the eval from cache
+  doesn't report "free and instant".
+
+### Statistics (n = 28, **paired**: both modes answer the same questions)
+- **Bootstrap 95% CI**: resample the 28 questions with replacement 10,000 times and recompute the mean each time.
+  The 2.5% and 97.5% percentiles bound the mean. No normality assumption, which suits bounded, skewed scores.
+  For differences, resample *questions* and compute graph − vector per question (this keeps the pairing).
+- **McNemar's exact test** (correct vs not): only **discordant** questions carry information (one mode right, the
+  other wrong). Under H₀ ("no difference") they split 50/50, so it's an exact binomial test. Questions both
+  get right (or wrong) tell nothing about the *difference*.
+- **Wilcoxon signed-rank** for paired recall: ranks of the per-question differences, no normality assumption.
+  It's more powerful than a sign test because it uses magnitudes.
+- *Why paired?* Question difficulty varies a lot. Pairing removes that variance (each question is its own
+  control), so the same n gives much more power than comparing two independent groups.
+- Honest framing: with n = 28 only **large** effects can be significant. "Not significant" ≠ "no effect"; report the
+  CI of the difference, which shows which effect sizes are still plausible.
+
+### Practical issues found while building the eval
+- The embedding rate limiter spaced *batches* (15 s each), so 28 single-question embeddings crawled. Fixed:
+  the limiter now counts **units** (texts), so one query waits ~0.75 s and a batch of 20 proportionally longer.
+- Latency measured with 3 evaluations in parallel was 4× too high (CPU contention in the reranker), so the
+  eval runs sequentially. Lesson: **measure latency under controlled concurrency**, and state which.
+
+### Round 1 result (28 questions): no measurable difference, and why
+- Judge score 0.91 vs 0.91, 24/28 vs 23/28 correct, recall@8 0.90 vs 0.89; paired difference +0.00
+  [−0.05, +0.05], McNemar p = 1.0 (a single discordant question).
+- **Ceiling effect**: the generated multi-hop questions name their entities and reuse passage wording, so vector
+  search finds both passages anyway. A test set that both methods ace **cannot discriminate** between them. That's
+  a property of the test set, not evidence that the methods are equal.
+- Error analysis:
+  - The only real "connection" question (q12, ÖGB ↔ GoldenTree): vector "no connection" (incorrect); graph found the
+    BAWAG link but **hedged** ("context does not contain direct information…") → partial. The answer prompt's "say
+    when it's not in the context" rule causes over-cautious answers on chains.
+  - **Corpus-wide** questions fail in both modes (0.6–0.7): aggregations like "all banks the ECB supervises" have
+    6+ gold passages, and top-k retrieval can't collect them. GraphRAG literature: *global* questions need a different
+    mechanism (graph aggregation queries, community summaries), not better top-k.
+
+### Round 2: pre-registered hold-out test (written BEFORE running it)
+- **Why a new question set:** fixing the prompt using the 28 questions and re-measuring on the same 28 would be **fitting
+  to the test set**. The prompt fix is evaluated only on new questions; the old 28 are re-run as a regression check
+  (does the fix break anything?), reported separately.
+- **Hypothesis H1:** on connection questions where the bridge entity is named neither in the question nor in either
+  entity's name, graph mode answers correctly more often than vector mode.
+- **Question construction (fixed in advance):** articles A and C both mention the subject of article B (string match);
+  A's article does not mention C's subject and vice versa; question = "How is <A> connected to <C>?";
+  gold = A's passage mentioning B + C's passage mentioning B; reference answer written from those two passages.
+  8 questions, the first 8 valid candidates by a fixed random seed (no picking of favourites).
+- **Prompt fix (applies to both modes):** "if the context links the entities through intermediate entities,
+  describe that chain; say the information is missing only if no such chain exists."
+- **Decision rule:** report the paired difference with its CI and McNemar p. n = 8 is tiny, so expect a
+  directional result, not significance; the CI shows how strong the evidence is.
+
+**Amendment (documented before any round-2 results were computed):** the rule as first written produced 5 of 8
+questions bridged by the **ECB** ("both are supervised by the ECB"), a trivial hub connection, the same problem
+as hubs in retrieval. New rule: bridges mentioned by ≥ 5 articles are excluded. The threshold sits at the natural gap in
+document frequency (ECB 10, European Banking Supervision 7, all others ≤ 4). It is not tuned on outcomes. Changing the
+*construction rule* after seeing only the questions is legitimate if it's disclosed. Changing it after seeing *results*
+would be cherry-picking ("garden of forking paths": every undisclosed analysis choice made after looking at the
+outcome inflates the false-positive rate).
+
+### Round 2 results
+**Hard set (8 pre-registered connection questions)**: H1 **not supported**.
+| | vector | graph |
+|---|---|---|
+| judge score | 0.38 | 0.44 (diff +0.06, 95% CI [−0.12, +0.25]) |
+| correct | 3/8 | 2/8 |
+| recall@8 | 0.56 | 0.50 |
+| recall@8 without reranker | **0.81** | 0.56 |
+- **The cross-encoder reranker is the biggest single effect**: on connection questions it drops vector recall from
+  0.81 to 0.56. MiniLM is trained on MS MARCO (short web queries → one relevant passage). A "How is A connected to C?"
+  question needs *two different* passages, each only half-relevant, which is exactly what a pointwise reranker scores down.
+  That's the reserved-slot argument again, now measured.
+- Graph mode's own weakness: the graph has to *contain* the bridge. Example: "Addiko was spun off from Hypo" was never
+  extracted as an edge, so no path can use it (**extraction recall caps graph recall**).
+- n = 8 is tiny: the CI spans everything from "slightly worse" to "clearly better". The honest statement is "no
+  evidence of a benefit at this sample size", **not** "no benefit".
+
+**Regression check (the 28 old questions with the new prompt)**: nothing broke. Graph 0.93 vs vector 0.91
+(+0.02 [0.00, +0.05]), 24/28 vs 23/28, one discordant question. The corpus-wide judge score for graph rose 0.60 → 0.80;
+q12 (ÖGB ↔ GoldenTree) is still "partial" (it mentions both as owners but not the 2006 sale).
+
+**Judge reliability without human labels**: the second judge (Qwen, a third model family) agrees on 51/56 (κ = 0.62,
+"substantial") and 13/16 on the hard set (κ = 0.69). Judge vs the deterministic entity check: κ = 0.62. This is
+*reliability*. *Validity* still needs the 10 hand labels (`eval/calibration_sheet.md`), because two LLMs can
+share the same mistake. The answering model differed between the modes (because of fallbacks) on only 1/28 questions.
+
+### Honest discussion (what I'd say in the interview)
+- On a **small, clean, encyclopaedic corpus**, plain vector RAG with k = 8 already sees about 5% of all chunks, and
+  LLM-written questions reuse the passages' wording. Under those conditions **GraphRAG gives no measurable QA advantage**.
+  It costs ~25% more tokens and an extraction step that is expensive and error-prone.
+- Where the graph **does** add value, and these are things the QA metric doesn't measure:
+  1. **Exploration**: paths, neighbourhoods, ownership histories and rankings, i.e. questions people wouldn't think to ask.
+  2. **Explainability and provenance**: every edge carries its source quote; the answer highlights the facts used.
+  3. **Structure**: time and stake on ownership edges, aggregations (graph queries), analytics.
+  4. **Error visibility**: wrong facts become visible objects (the SIA edge) instead of hiding inside embeddings.
+- When I'd expect QA gains: larger corpora where top-k sees a tiny fraction, entity-centric questions phrased differently
+  from the text, and global/aggregation questions answered by graph queries instead of top-k.
+- What I'd change next, in order of measured impact: (1) drop or replace the reranker for connection-type questions,
+  (2) an aggregation mode for corpus-wide questions, (3) raise extraction recall (second pass on relation-poor chunks),
+  (4) a larger, human-written test set (n = 28 + 8 only detects big effects).

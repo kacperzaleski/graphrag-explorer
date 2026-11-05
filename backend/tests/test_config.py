@@ -60,3 +60,9 @@ def test_separate_answer_provider():
     s = make(gemini_api_key="g", cerebras_api_key="c", answer_provider="cerebras")
     assert s.chat_endpoint("extract").provider == "gemini"
     assert s.chat_endpoint("answer").provider == "cerebras"
+
+
+def test_judge_can_use_another_provider():
+    s = make(gemini_api_key="g", groq_api_key="q", judge_provider="groq")
+    assert s.chat_endpoint("judge").provider == "groq"
+    assert s.chat_endpoint("answer").provider == "gemini"

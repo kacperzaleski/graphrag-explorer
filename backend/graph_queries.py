@@ -45,7 +45,7 @@ class GraphRepository:
         if len(seeds) < 2:
             return None
         graph = gr.Subgraph(seeds=[s.key for s in seeds], nodes={s.key: s for s in seeds})
-        await gr.add_paths(self.driver, graph, max_hops, self.hub_degree)
+        await gr.add_paths(self.driver, graph, max_hops, self.hub_degree, explorer=True)
         gr.fill_names(graph)
         return gr.subgraph_to_dict(graph)
 

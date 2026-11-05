@@ -20,8 +20,8 @@ class Embedder:
         self.endpoint = endpoint
         self.cache = cache
         self.calls = 0
-        # one limiter slot per batch: batches/minute = texts/minute / batch size
-        self.limiter = RateLimiter(max(1, texts_per_minute // BATCH_SIZE))
+        # counted in texts: a single query waits ~0.75 s, a batch of 20 proportionally longer
+        self.limiter = RateLimiter(texts_per_minute)
         self.client = AsyncOpenAI(base_url=endpoint.base_url, api_key=endpoint.api_key,
                                   timeout=timeout, max_retries=5)
 
@@ -51,7 +51,7 @@ class Embedder:
         return (await self.embed([text]))[0]
 
     async def _request(self, texts: list[str]) -> list[list[float]]:
-        await self.limiter.wait()
+        await self.limiter.wait(len(texts))
         ep = self.endpoint
         extra = {"dimensions": ep.dimensions} if ep.dimensions else {}
         result = await self.client.embeddings.create(model=ep.model, input=texts, **extra)

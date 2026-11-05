@@ -44,6 +44,14 @@ class AskResult:
         return asdict(self)
 
 
+@dataclass
+class Retrieval:
+    passages: list[Hit]
+    facts: list  # graph facts (Edge) for the prompt; [] in vector mode
+    graph: gr.Subgraph | None
+    timer: "_Timer"
+
+
 class Pipeline:
     def __init__(self, settings: Settings, driver: AsyncDriver, embedder: Embedder, llm: LLM,
                  reranker):
@@ -61,22 +69,23 @@ class Pipeline:
                   timeout=settings.llm_timeout, cache=DiskCache("llm"))
         return cls(settings, driver, embedder, llm, make_reranker(settings.reranker))
 
-    async def ask(self, question: str, mode: Mode = "graph", hops: int | None = None) -> AskResult:
+    async def retrieve(self, question: str, mode: Mode = "graph", hops: int | None = None,
+                       reranker=None) -> Retrieval:
+        """Everything before the LLM answer. Used alone by the evaluation's retrieval metrics
+        and ablations, which therefore cost no LLM calls."""
         timer = _Timer()
         s = self.settings
+        reranker = reranker or self.reranker
         vector = await self.embedder.embed_one(question)
         timer.lap("embed")
 
         if mode == "vector":
             candidates = await vector_chunks(self.driver, vector, s.candidate_k)
             timer.lap("search")
-            passages = await self.reranker.rerank(question, candidates, s.top_k)
+            passages = await reranker.rerank(question, candidates, s.top_k)
             timer.lap("rerank")
-            answer = await generate_answer(self.llm, question, passages, [])
-            timer.lap("answer")
-            return AskResult(question, mode, answer, passages, {}, timer.laps)
+            return Retrieval(passages, [], None, timer)
 
-        # graph mode
         dense, sparse = await asyncio.gather(
             vector_chunks(self.driver, vector, s.candidate_k),
             fulltext_chunks(self.driver, question, s.candidate_k))
@@ -89,15 +98,17 @@ class Pipeline:
         timer.lap("expand")
 
         pool = await self._candidate_pool(fused, graph)
-        reranked = await self.reranker.rerank(question, pool, len(pool))
+        reranked = await reranker.rerank(question, pool, len(pool))
         passages = gr.select_chunks(reranked, graph, s.top_k)
         timer.lap("rerank")
+        return Retrieval(passages, gr.facts_for_answer(graph, passages), graph, timer)
 
-        facts = gr.facts_for_answer(graph, passages)
-        answer = await generate_answer(self.llm, question, passages, facts)
-        timer.lap("answer")
-        subgraph = gr.subgraph_to_dict(graph, set(answer.used_edges))
-        return AskResult(question, mode, answer, passages, subgraph, timer.laps)
+    async def ask(self, question: str, mode: Mode = "graph", hops: int | None = None) -> AskResult:
+        r = await self.retrieve(question, mode, hops)
+        answer = await generate_answer(self.llm, question, r.passages, r.facts)
+        r.timer.lap("answer")
+        subgraph = gr.subgraph_to_dict(r.graph, set(answer.used_edges)) if r.graph else {}
+        return AskResult(question, mode, answer, r.passages, subgraph, r.timer.laps)
 
     async def _candidate_pool(self, fused: list[Hit], graph: gr.Subgraph) -> list[Hit]:
         """Hybrid-search chunks + the chunks behind the subgraph edges (path edges first)."""

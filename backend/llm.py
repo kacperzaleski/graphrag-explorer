@@ -25,19 +25,20 @@ log = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """At most `rpm` request starts per minute, evenly spaced (safe across concurrent tasks)."""
+    """At most `rpm` units per minute, evenly spaced (safe across concurrent tasks). A request
+    can cost several units (an embedding batch of 20 texts costs 20)."""
 
     def __init__(self, rpm: int):
         self.interval = 60.0 / rpm
         self.next_slot = 0.0
         self.lock = asyncio.Lock()
 
-    async def wait(self) -> None:
+    async def wait(self, units: int = 1) -> None:
         async with self.lock:
             now = time.monotonic()
             if self.next_slot > now:
                 await asyncio.sleep(self.next_slot - now)
-            self.next_slot = max(now, self.next_slot) + self.interval
+            self.next_slot = max(now, self.next_slot) + self.interval * units
 
 
 @dataclass
@@ -59,6 +60,9 @@ class Completion:
     cached: bool
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # of the original API call, also for cache hits: an evaluation re-run from the cache still
+    # reports real cost and latency instead of "free and instant"
+    seconds: float = 0.0
 
 
 class LLM:
@@ -89,11 +93,15 @@ class LLM:
             for model in models:  # a reply from a fallback model counts too: re-runs stay free
                 if (hit := self.cache.get(keys[model])) is not None:
                     self.usage.cache_hits += 1
-                    return Completion(hit["reply"], hit["model"], cached=True)
+                    usage = hit.get("usage") or {}
+                    return Completion(hit["reply"], hit["model"], cached=True,
+                                      prompt_tokens=usage.get("prompt_tokens") or 0,
+                                      completion_tokens=usage.get("completion_tokens") or 0,
+                                      seconds=hit.get("seconds", 0.0))
 
         for i, model in enumerate(models):
             try:
-                reply, usage = await self._request(model, messages, response_format)
+                reply, usage, seconds = await self._request(model, messages, response_format)
             # overloaded (503), hanging, or out of quota (429; quotas are per model) after retries
             except (InternalServerError, APITimeoutError, RateLimitError) as exc:
                 if i == len(models) - 1:
@@ -102,15 +110,17 @@ class LLM:
                             type(exc).__name__, models[i + 1])
                 continue
             if self.cache is not None:
-                self.cache.put(keys[model], {"model": model, "reply": reply, "usage": usage})
+                self.cache.put(keys[model], {"model": model, "reply": reply, "usage": usage,
+                                             "seconds": seconds})
             usage = usage or {}
             return Completion(reply, model, cached=False,
                               prompt_tokens=usage.get("prompt_tokens") or 0,
-                              completion_tokens=usage.get("completion_tokens") or 0)
+                              completion_tokens=usage.get("completion_tokens") or 0,
+                              seconds=seconds)
         raise AssertionError("unreachable")
 
     async def _request(self, model: str, messages: list[dict],
-                       response_format: dict | None) -> tuple[str, dict | None]:
+                       response_format: dict | None) -> tuple[str, dict | None, float]:
         await self.limiter.wait()
         start = time.perf_counter()
         response = await self.client.chat.completions.create(
@@ -119,13 +129,15 @@ class LLM:
             temperature=self.temperature,
             **({"response_format": response_format} if response_format else {}),
         )
+        seconds = time.perf_counter() - start
         self.usage.calls += 1
-        self.usage.seconds += time.perf_counter() - start
+        self.usage.seconds += seconds
         usage = response.usage
         if usage:
             self.usage.prompt_tokens += usage.prompt_tokens
             self.usage.completion_tokens += usage.completion_tokens
-        return response.choices[0].message.content or "", usage.model_dump() if usage else None
+        content = response.choices[0].message.content or ""
+        return content, usage.model_dump() if usage else None, round(seconds, 3)
 
 
 def _response_format(schema: type[BaseModel]) -> dict:

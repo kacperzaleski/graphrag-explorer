@@ -20,12 +20,16 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
+eval = [
+    "scipy>=1.18.1",
+]
 prototype = [
     "streamlit>=1.66.1",
 ]
 
 [tool.uv]
 package = false  # an app, not a library: run with `python -m backend.<module>` from the repo root
+default-groups = ["dev", "eval"]  # `uv sync` locally; Docker installs without them
 
 # CPU-only torch for the reranker: avoids a ~2 GB CUDA download (no GPU needed for a small model)
 [[tool.uv.index]]

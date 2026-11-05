@@ -79,7 +79,7 @@ class FakeLLM(LLM):
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
-        return reply, None
+        return reply, None, 0.5
 
 
 def api_error(cls, status):
@@ -109,3 +109,19 @@ def test_fallback_model_and_cache(tmp_path, error):
     again = FakeLLM([], cache=DiskCache("llm", root=tmp_path))
     assert [e.name for e in asyncio.run(extract(again, CHUNK)).entities] == ["BAWAG"]
     assert again.models_called == [] and again.usage.cache_hits == 1
+
+
+def test_rate_limiter_spaces_by_units():
+    import time
+
+    from backend.llm import RateLimiter
+
+    async def go():
+        limiter = RateLimiter(rpm=600)  # 0.1 s per unit
+        start = time.monotonic()
+        await limiter.wait(1)  # first call: immediate
+        await limiter.wait(3)  # waits for the 1 unit before it
+        await limiter.wait(1)  # waits for the 3 units before it
+        return time.monotonic() - start
+
+    assert 0.35 < asyncio.run(go()) < 0.6

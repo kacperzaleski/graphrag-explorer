@@ -144,8 +144,18 @@ def facts_for_answer(graph: Subgraph, passages: list[Hit]) -> list[Edge]:
     return [graph.edges[eid] for eid in ordered[:MAX_FACTS]]
 
 
-async def add_paths(driver: AsyncDriver, graph: Subgraph, max_len: int, hub_degree: int) -> None:
-    """Shortest paths between every pair of seeds; their edges are marked as path edges."""
+async def add_paths(driver: AsyncDriver, graph: Subgraph, max_len: int, hub_degree: int,
+                    explorer: bool = False) -> None:
+    """Shortest paths between every pair of seeds; their edges are marked as path edges.
+
+    explorer=True (path finder in the UI): considers ALL shortest paths, also excludes events as
+    stepping stones ("both were involved in the 2008 crisis"), and among equally short paths
+    prefers ownership edges over supervision edges: "ÖGB and Cerberus both owned BAWAG" says more
+    than "both are supervised by the ECB". Not used by /ask yet, so the evaluation stays
+    comparable."""
+    if explorer:
+        await _explorer_paths(driver, graph, max_len, hub_degree)
+        return
     # a path length cannot be a query parameter; max_len is an int from our own settings
     records, _, _ = await driver.execute_query(f"""
         UNWIND $pairs AS pair
@@ -193,6 +203,32 @@ def _name_coverage(names: list[str], question_words: set[str]) -> float:
     """Best share of words of any of the entity's names (or aliases) found in the question."""
     return max((sum(w in question_words for w in ws) / len(ws)
                 for ws in (_words(n) for n in names) if ws), default=0.0)
+
+
+async def _explorer_paths(driver: AsyncDriver, graph: Subgraph, max_len: int,
+                          hub_degree: int) -> None:
+    records, _, _ = await driver.execute_query(f"""
+        MATCH (a:Entity {{key: $a}}), (b:Entity {{key: $b}})
+        MATCH p = allShortestPaths((a)-[:RELATES*..{int(max_len)}]-(b))
+        WHERE all(n IN nodes(p)[1..-1] WHERE n.degree <= $hub_degree
+                  AND NOT n.type IN ['LOCATION', 'EVENT'])
+        WITH p, size([r IN relationships(p) WHERE r.type = 'SUPERVISES']) AS supervision,
+             size([r IN relationships(p) WHERE r.type IN ['OWNS', 'ACQUIRED', 'MERGED_WITH']])
+               AS ownership
+        ORDER BY supervision ASC, ownership DESC
+        LIMIT 1
+        UNWIND relationships(p) AS r
+        RETURN r.id AS id, r.type AS type, r.chunk_ids AS chunk_ids,
+               startNode(r).key AS source, endNode(r).key AS target,
+               r.start_year AS start_year, r.end_year AS end_year,
+               r.stake_percent AS stake_percent""",
+        a=graph.seeds[0], b=graph.seeds[1], hub_degree=hub_degree)
+    for r in records:
+        _add_edge(graph, r)
+        graph.path_edges.append(r["id"])
+    keys = {k for r in records for k in (r["source"], r["target"])} - set(graph.nodes)
+    for node in await load_nodes(driver, list(keys)):
+        graph.nodes[node.key] = node
 
 
 def _add_edge(graph: Subgraph, r) -> None:

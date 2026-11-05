@@ -200,6 +200,9 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+eval = [
+    { name = "scipy" },
+]
 prototype = [
     { name = "streamlit" },
 ]
@@ -224,6 +227,7 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
 ]
+eval = [{ name = "scipy", specifier = ">=1.18.1" }]
 prototype = [{ name = "streamlit", specifier = ">=1.66.1" }]
 
 [[package]]

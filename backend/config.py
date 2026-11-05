@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     llm_fallback_models: str | None = None  # comma-separated; None = preset's fallbacks, "" = none
     answer_provider: str | None = None  # None = same as LLM_PROVIDER
     answer_model: str | None = None
+    # evaluation judge: ideally another provider than the answer model (self-preference bias)
+    judge_provider: str | None = None  # None = same as LLM_PROVIDER
+    judge_model: str | None = None
     llm_rpm: int = 10  # client-side rate limit (requests per minute), below the free-tier limits
     llm_timeout: float = 60.0  # seconds; free tiers sometimes hang instead of failing
     embed_texts_per_minute: int = 80  # Gemini free tier: 100 texts/min (each text counts)
@@ -118,12 +121,17 @@ class Settings(BaseSettings):
         return key.get_secret_value()
 
     def chat_endpoint(self, role: str = "extract") -> Endpoint:
-        """role="extract" -> LLM_*; role="answer" -> ANSWER_* if set, else LLM_*."""
+        """role="extract" -> LLM_*; role="answer" / "judge" -> ANSWER_* / JUDGE_* if set,
+        else LLM_*."""
         provider, model = self.llm_provider, self.llm_model
-        if role == "answer" and self.answer_provider:
-            provider, model = self.answer_provider, self.answer_model
-        elif role == "answer" and self.answer_model:
-            model = self.answer_model
+        override_provider, override_model = {
+            "answer": (self.answer_provider, self.answer_model),
+            "judge": (self.judge_provider, self.judge_model),
+        }.get(role, (None, None))
+        if override_provider:
+            provider, model = override_provider, override_model
+        elif override_model:
+            model = override_model
         preset = _preset(provider)
         # an explicitly chosen model means exactly that model, not the preset's fallbacks
         fallbacks = preset.fallback_models if model is None else ()

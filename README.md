@@ -3,7 +3,7 @@
 Documents → knowledge graph → hybrid graph + vector retrieval → FastAPI → React graph explorer.
 An end-to-end demo of taking GraphRAG from scripts to an app, with tests, evaluation and CI/CD.
 
-> Work in progress, built in phases. Status: **Phase 4 (React explorer) done.**
+> Work in progress, built in phases. Status: **Phase 5 (evaluation) done.**
 
 ## Setup (so far)
 
@@ -55,6 +55,41 @@ chat provider offers embeddings.
 | `infra/` | Jenkins, Kubernetes, Airflow (Phase 6) |
 | `data/aliases.yaml` | curated entity aliases (human-reviewed merges) |
 | `NOTES.md` | running interview notes: concepts and design decisions |
+
+## Evaluation
+
+`uv run python -m eval.run` (details and methodology: `NOTES.md`, Phase 5). Questions are built from the
+**text, not the graph** (otherwise graph mode would be graded on its own data). The answers come from Gemini and the
+judge from Groq `gpt-oss-120b` (another vendor, against self-preference bias), with a second judge (Qwen) for
+reliability. All comparisons are paired (both modes answer the same questions).
+
+**Main set: 28 questions** (13 multi-hop, 10 lookup, 5 corpus-wide), `eval/results.md`:
+
+| | vector (baseline) | graph |
+|---|---|---|
+| judge score [95% CI] | 0.91 [0.84, 0.98] | 0.93 [0.86, 0.98] |
+| correct | 23/28 | 24/28 |
+| recall@8 | 0.90 | 0.89 |
+| LLM latency p50 / tokens per question | 1.3 s / 2.9k | 1.3 s / 3.5k |
+
+**Pre-registered hard set: 8 "How is A connected to C?" questions** with a hidden bridge, `eval/results_hard.md`:
+
+| | vector | graph |
+|---|---|---|
+| judge score | 0.38 | 0.44 (diff +0.06, CI [−0.12, +0.25]) |
+| correct | 3/8 | 2/8 |
+| recall@8 (without reranker) | 0.56 (**0.81**) | 0.50 (0.56) |
+
+**Honest reading.**
+- On this small, clean corpus, GraphRAG gives **no measurable QA advantage**. Differences are within noise, and it costs
+  ~25% more tokens plus an extraction step.
+- The first round showed a **ceiling effect**: generated questions reuse the passages' wording.
+- The hypothesis that the graph helps on hidden-bridge connection questions is **not supported** at n = 8.
+- The largest measured effect is that **the reranker hurts** connection questions.
+- The graph's value here is what QA accuracy doesn't measure: exploration, provenance (every edge has its source
+  quote), time and stake on ownership, analytics, and visible errors.
+- Limitations: small n, LLM-generated questions, and judge validity still pending 10 human labels
+  (`eval/calibration_sheet.md`).
 
 ## Data attribution
 
