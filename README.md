@@ -3,7 +3,7 @@
 Documents → knowledge graph → hybrid graph + vector retrieval → FastAPI → React graph explorer.
 An end-to-end demo of taking GraphRAG from scripts to an app, with tests, evaluation and CI/CD.
 
-> Work in progress, built in phases. Status: **Phase 1 (ingestion + graph) done.**
+> Work in progress, built in phases. Status: **Phase 3 (API) done.**
 
 ## Setup (so far)
 
@@ -14,6 +14,8 @@ docker compose up -d neo4j      # Neo4j 5 LTS; browser at http://localhost:7474
 uv run python -m backend.check  # verifies Neo4j, chat model and embedding model
 uv run python -m backend.ingest --alias-candidates   # builds the graph (idempotent, cached)
 uv run --group prototype streamlit run prototype/app.py   # throwaway prototype UI
+uv run python -m backend.pipeline "How is ÖGB connected to GoldenTree?"   # CLI, --mode vector|graph
+uv run uvicorn backend.api:app --no-access-log   # API, docs at http://localhost:8000/docs
 uv run pytest
 ```
 

@@ -68,14 +68,14 @@ async def find_seeds(driver: AsyncDriver, question: str, fused_chunks: list[Hit]
             RETURN e.key AS key, sum(ch.score) AS score ORDER BY score DESC LIMIT $n""",
             chunks=[{"id": h.id, "score": h.score} for h in fused_chunks[:5]], n=SEED_LIMIT)
         keys = [r["key"] for r in records]
-    return await _nodes(driver, keys)
+    return await load_nodes(driver, keys)
 
 
 async def expand(driver: AsyncDriver, seeds: list[Node], chunk_relevance: dict[str, float],
                  hops: int, max_nodes: int, hub_degree: int) -> Subgraph:
     graph = Subgraph(seeds=[s.key for s in seeds], nodes={s.key: s for s in seeds})
     if len(seeds) >= 2:
-        await _add_paths(driver, graph, max_len=2 * hops, hub_degree=hub_degree)
+        await add_paths(driver, graph, max_len=2 * hops, hub_degree=hub_degree)
 
     frontier = [s for s in seeds]
     for hop in range(1, hops + 1):
@@ -91,8 +91,11 @@ async def expand(driver: AsyncDriver, seeds: list[Node], chunk_relevance: dict[s
                    m.key AS key, m.name AS name, m.type AS node_type, m.degree AS degree""",
             keys=sources)
 
-        def relevance(r) -> float:
-            return max((chunk_relevance.get(c, 0.0) for c in r["chunk_ids"]), default=0.0)
+        def relevance(r) -> tuple[float, int]:
+            # relevance to the question first; ties (e.g. no question, in the explorer) go to
+            # better-connected neighbours, which are more likely to lead somewhere
+            score = max((chunk_relevance.get(c, 0.0) for c in r["chunk_ids"]), default=0.0)
+            return score, r["degree"] or 0
 
         next_frontier = []
         for r in sorted(records, key=relevance, reverse=True):
@@ -105,7 +108,7 @@ async def expand(driver: AsyncDriver, seeds: list[Node], chunk_relevance: dict[s
                 next_frontier.append(node)
             _add_edge(graph, r)
         frontier = next_frontier
-    _fill_names(graph)
+    fill_names(graph)
     return graph
 
 
@@ -136,7 +139,8 @@ def facts_for_answer(graph: Subgraph, passages: list[Hit]) -> list[Edge]:
     return [graph.edges[eid] for eid in ordered[:MAX_FACTS]]
 
 
-async def _add_paths(driver: AsyncDriver, graph: Subgraph, max_len: int, hub_degree: int) -> None:
+async def add_paths(driver: AsyncDriver, graph: Subgraph, max_len: int, hub_degree: int) -> None:
+    """Shortest paths between every pair of seeds; their edges are marked as path edges."""
     # a path length cannot be a query parameter; max_len is an int from our own settings
     records, _, _ = await driver.execute_query(f"""
         UNWIND $pairs AS pair
@@ -154,8 +158,22 @@ async def _add_paths(driver: AsyncDriver, graph: Subgraph, max_len: int, hub_deg
         _add_edge(graph, r)
         graph.path_edges.append(r["id"])
     path_keys = {k for r in records for k in (r["source"], r["target"])} - set(graph.nodes)
-    for node in await _nodes(driver, list(path_keys)):
+    for node in await load_nodes(driver, list(path_keys)):
         graph.nodes[node.key] = node  # path nodes always count, even beyond max_nodes
+
+
+def subgraph_to_dict(graph: Subgraph, used_edges: set[str] = frozenset()) -> dict:
+    """JSON-ready subgraph for the API / UI: nodes and edges keyed by entity key."""
+    return {
+        "seeds": graph.seeds,
+        "truncated": graph.truncated,
+        "nodes": [{"key": n.key, "name": n.name, "type": n.type, "degree": n.degree, "hop": n.hop}
+                  for n in graph.nodes.values()],
+        "edges": [{"id": eid, "source": graph.edge_ends[eid][0], "target": graph.edge_ends[eid][1],
+                   "type": e.type, "chunk_ids": e.chunk_ids, "on_path": eid in graph.path_edges,
+                   "used": eid in used_edges}
+                  for eid, e in graph.edges.items()],
+    }
 
 
 def _words(text: str) -> list[str]:
@@ -175,7 +193,7 @@ def _add_edge(graph: Subgraph, r) -> None:
     graph.edge_ends[r["id"]] = (r["source"], r["target"])
 
 
-def _fill_names(graph: Subgraph) -> None:
+def fill_names(graph: Subgraph) -> None:
     """Edges were built with keys; swap in display names, dropping edges to excluded nodes."""
     for eid, (source, target) in list(graph.edge_ends.items()):
         if source not in graph.nodes or target not in graph.nodes:
@@ -185,7 +203,7 @@ def _fill_names(graph: Subgraph) -> None:
         edge.source, edge.target = graph.nodes[source].name, graph.nodes[target].name
 
 
-async def _nodes(driver: AsyncDriver, keys: list[str]) -> list[Node]:
+async def load_nodes(driver: AsyncDriver, keys: list[str]) -> list[Node]:
     if not keys:
         return []
     records, _, _ = await driver.execute_query("""

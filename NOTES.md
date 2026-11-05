@@ -445,3 +445,116 @@ shown). Without it, the UI would have shown a citation pointing at a passage tha
 - Inference: ~1.5 s for 30 pairs and ~3 s for 60 pairs on 4 CPU threads (chunks up to 512 tokens).
 - Production options: a GPU; ONNX Runtime or int8 quantization (often 2–4× faster on CPU); a smaller candidate
   pool; a dedicated reranker service shared by API replicas, so each pod doesn't hold its own model.
+
+### Phase 1+2 quiz: model answers
+**Q1: Why one canonical direction per relation?** If one fact can be stored two ways (`BAWAG OWNS PSK` and
+`PSK SUBSIDIARY_OF BAWAG`), the graph has two different edges for it:
+- Evidence is split across them, and queries must check both patterns. Forget one and results are *silently
+  incomplete*.
+- Counting ("how many companies does BAWAG own") undercounts.
+- **Ownership chains can't be followed**, because along a path you can no longer tell owner from owned.
+
+Deciding direction once, at extraction time, is **data normalization**, the same idea as a consistent
+schema in a relational DB.
+
+**Q2: Why reserved slots for path edges?** "How is ÖGB connected to GoldenTree?" needs `bawag#003` (ÖGB held 70%)
+*and* `bawag#000` (GoldenTree is the largest shareholder). The reranker scores each chunk **independently**
+against the question: the ÖGB chunk scores high, while the GoldenTree chunk, and even more the *middle hop* of
+a longer chain (which mentions neither entity in the question), scores low. Plain top-k fills the context
+with similar ÖGB passages and drops the rest of the chain, so the LLM says "no connection". Reserved slots
+guarantee evidence for every hop. The general point: **relevance is a property of the set of passages**
+(do they cover the reasoning chain together?), but standard retrieval scores passages one by one.
+
+**Q3: Why RRF instead of adding scores?** Cosine similarity is in [0, 1] (in practice a narrow band like
+0.6–0.9), while BM25 is **unbounded** and depends on query length and corpus statistics, so in a sum BM25
+dominates. The scores aren't comparable or explainable together. Normalizing (min-max per query) is possible
+but fragile (one outlier squashes the rest). RRF uses ranks only: no tuning, robust, explainable.
+
+---
+
+## Phase 3: FastAPI (`backend/api.py`)
+
+Run: `uv run uvicorn backend.api:app --reload --no-access-log` → http://localhost:8000/docs
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | liveness: the process is up (no dependency checks) |
+| `GET /ready` | readiness: Neo4j reachable → 200, else 503 with details |
+| `POST /ask` | `{question, mode, hops}` → answer, citations (full passages), used edges, subgraph, timings, token usage |
+| `GET /graph/search?q=` | type-ahead entity search (prefix match on names and aliases) |
+| `GET /graph/neighbors?node_id=&hops=&limit=` | subgraph around an entity: the explorer's expand-on-click |
+| `GET /graph/path?source=&target=` | shortest connection between two entities, **without the LLM** (instant, free) |
+| `GET /graph/node/{id}` | entity card: description, aliases, relations with evidence, source passages |
+| `GET /graph/stats` | counts per entity and relation type (legend, filters) |
+
+### Lifespan: create expensive things once
+The Neo4j driver (connection pool), the LLM client (HTTP connection pool, rate limiter) and the reranker model
+(~7 s to load) are created **once at startup** in the `lifespan` context manager, stored on `app.state`, and
+closed on shutdown. Per-request creation would mean a new TCP/TLS handshake and a model load per request.
+The reranker warm-up runs in a thread, because it's CPU work and would otherwise block startup of the event loop.
+
+### Dependency injection
+Endpoints declare what they need: `pipeline: Annotated[Pipeline, Depends(get_pipeline)]`. FastAPI calls the
+provider per request. Benefits:
+- **Testability**: `app.dependency_overrides[get_graph] = lambda: FakeGraph()`. The API tests run without
+  Neo4j, the LLM or the model download, in about 1 s.
+- **Loose coupling**: endpoints depend on an interface (`GraphRepository`), not on Neo4j. That's the
+  *repository pattern*: all Cypher for the explorer lives in `graph_queries.py`.
+- *Follow-up:* "Why not a global variable?" Globals are created at import time (before config is loaded, and
+  even in tests), can't be swapped per test, and hide dependencies.
+
+### Pydantic models as the API contract (`backend/schemas.py`)
+- Requests are validated before the endpoint runs. Bad input gets a **422** with the exact field and reason,
+  *all* errors at once, and never reaches the DB or LLM (1.4 ms, measured).
+- `response_model` filters responses, so internal fields can't leak by accident. The models also generate the
+  OpenAPI schema at `/docs`, and the React client's TypeScript types mirror them.
+- **Input limits** (question ≤ 500 characters, hops ≤ 3, limit ≤ 200): they bound cost and latency per request,
+  since hops grow the subgraph exponentially and every question costs LLM tokens. A cheap DoS protection.
+
+### Concurrency control
+- `asyncio.Semaphore(MAX_CONCURRENT_ASKS = 4)` around `/ask`: at most 4 LLM-backed requests in flight per
+  process, and the rest wait. It protects the provider quota and memory. The explorer endpoints (pure Cypher,
+  milliseconds) are not limited.
+- *Follow-up:* "Across multiple replicas?" A semaphore is per process. Global limits need a shared counter
+  (Redis), an API gateway rate limit, or a queue in front of the LLM workers.
+
+### Errors: map infrastructure failures to meaningful HTTP codes
+- Neo4j down → **503** "graph database unavailable". LLM quota exhausted or outage after all retries and
+  fallbacks → **503** "try again later".
+- Never 500 with a stack trace to the client (that leaks internals). The detail goes to the log, with the
+  request ID.
+- Unknown entity → 404. Validation → 422. `source == target` → 422.
+
+### Liveness vs readiness
+- **Liveness** (`/health`): "is the process alive?" If it fails, Kubernetes **restarts** the pod. It must not
+  check dependencies: if Neo4j is down, restarting every API pod doesn't help, and it causes a restart storm.
+- **Readiness** (`/ready`): "can I serve traffic now?" If it fails, Kubernetes **stops routing** traffic to
+  the pod but keeps it running. Checks Neo4j. During startup (model loading) the pod isn't ready yet.
+
+### Structured logging with request IDs (`backend/logging_setup.py`)
+- One JSON object per line: log platforms (ELK, Loki, CloudWatch) index fields directly, e.g.
+  `status >= 500` or `ms > 5000`, with no regex parsing.
+- The **request ID** comes from the `X-Request-ID` header (or a new one), is returned in the response, and is
+  stored in a **ContextVar**. Every log line during that request carries it, even deep in the pipeline,
+  without passing it through every function.
+  - A ContextVar is **per asyncio task**. A global variable would be overwritten by concurrent requests.
+  - Propagating the ID to downstream services is the start of **distributed tracing** (OpenTelemetry would be
+    the next step).
+- uvicorn runs with `--no-access-log`, because the middleware already writes one structured access line per
+  request.
+
+### CORS
+Browsers block JavaScript from calling another origin (the React dev server on :5173 calling the API on
+:8000) unless the API allows it. `CORS_ORIGINS` lists exactly the frontend's origin: no `*` (combined with
+credentials, that would let any site call the API with a user's cookies). CORS is a *browser*
+protection, not authentication: curl ignores it.
+
+### Two details found while testing against real data
+- **Prefix queries have a constant score in Lucene**: `bawa*` gave every hit 1.0, so "BAWAG Bank CZ" came
+  before "BAWAG Group". Fix: break ties by **degree** (centrality as a popularity prior).
+- **The graph has no time dimension.** `BayernLB OWNS BAWAG Group` looked like an error, because BayernLB lost the
+  2006 bid. But it is correct: BayernLB held 46% in the 1990s, before ÖGB bought the stake back. `OWNS` can't
+  tell "owned in 1995" from "owns today". Fix options: temporal qualifiers on edges (`since`, `until`,
+  `stake`), extracted by the LLM. That is the standard **temporal knowledge graph** design (or reification:
+  an `:Ownership` node with properties). Today the evidence quote on each edge carries the time context, and
+  the UI shows it.

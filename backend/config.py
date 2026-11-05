@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     chunk_tokens: int = 512  # chunk budget incl. the title/section prefix (~4 characters per token)
     chunk_overlap_tokens: int = 64  # trailing sentences repeated at the start of the next chunk
 
+    # API (Phase 3)
+    cors_origins: list[str] = ["http://localhost:5173"]  # Vite dev server; JSON list in env
+    max_concurrent_asks: int = 4  # LLM-backed requests processed at once; others wait
+    log_level: str = "INFO"
+
     # retrieval (Phase 2)
     reranker: str = "cross-encoder"  # cross-encoder | none
     top_k: int = 8  # passages given to the answering LLM

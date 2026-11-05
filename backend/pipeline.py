@@ -96,8 +96,8 @@ class Pipeline:
         facts = gr.facts_for_answer(graph, passages)
         answer = await generate_answer(self.llm, question, passages, facts)
         timer.lap("answer")
-        return AskResult(question, mode, answer, passages, _subgraph_dict(graph, answer),
-                         timer.laps)
+        subgraph = gr.subgraph_to_dict(graph, set(answer.used_edges))
+        return AskResult(question, mode, answer, passages, subgraph, timer.laps)
 
     async def _candidate_pool(self, fused: list[Hit], graph: gr.Subgraph) -> list[Hit]:
         """Hybrid-search chunks + the chunks behind the subgraph edges (path edges first)."""
@@ -109,19 +109,6 @@ class Pipeline:
             "UNWIND $ids AS id MATCH (c:Chunk {id: id}) RETURN c.id AS id, c.text AS text",
             ids=missing)
         return fused + [Hit(r["id"], 0.0, r["text"], {"graph": True}) for r in records]
-
-
-def _subgraph_dict(graph: gr.Subgraph, answer: AnswerResult) -> dict:
-    used = set(answer.used_edges)
-    return {
-        "seeds": graph.seeds,
-        "truncated": graph.truncated,
-        "nodes": [asdict(n) for n in graph.nodes.values()],
-        "edges": [{"id": eid, "source": graph.edge_ends[eid][0], "target": graph.edge_ends[eid][1],
-                   "type": e.type, "chunk_ids": e.chunk_ids, "on_path": eid in graph.path_edges,
-                   "used": eid in used}
-                  for eid, e in graph.edges.items()],
-    }
 
 
 class _Timer:
