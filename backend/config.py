@@ -23,13 +23,19 @@ class Provider:
     embed_dim: int | None = None
     # Gemini lets you request a shorter vector ("Matryoshka" embeddings); Mistral's size is fixed.
     supports_dimensions: bool = False
+    # tried in order when the chat model is overloaded (503) or times out after all retries
+    fallback_models: tuple[str, ...] = ()
 
 
-# Defaults checked on 2026-11-05. Model names change often: override with LLM_MODEL / EMBED_MODEL.
+# Defaults checked on 2026-11-05 (gemini-2.5-* is closed to new users; availability of the 3.x
+# models varies by the minute on the free tier). Override with LLM_MODEL / EMBED_MODEL.
 PROVIDERS: dict[str, Provider] = {
     "gemini": Provider(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        # flash-lite: the free tier allows only 20 requests/day for gemini-3.5-flash (per model),
+        # too few for ~160 extraction calls
         chat_model="gemini-3.5-flash-lite",
+        fallback_models=("gemini-3.1-flash-lite", "gemini-3.5-flash"),
         embed_model="gemini-embedding-001",
         embed_dim=768,
         supports_dimensions=True,
@@ -54,14 +60,23 @@ class Endpoint:
     model: str
     api_key: str
     dimensions: int | None = None  # embeddings only: requested vector size, if the API accepts one
+    fallback_models: tuple[str, ...] = ()  # chat only
 
 
 class Settings(BaseSettings):
     # .env found by path (not the current directory), so `python -m` works from anywhere
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", extra="ignore")
 
+    # LLM_* is used for extraction (and answering, unless ANSWER_* is set): a strong model for the
+    # one-off extraction, optionally a fast one for interactive answers
     llm_provider: str = "gemini"
     llm_model: str | None = None  # None = provider's default chat model
+    llm_fallback_models: str | None = None  # comma-separated; None = preset's fallbacks, "" = none
+    answer_provider: str | None = None  # None = same as LLM_PROVIDER
+    answer_model: str | None = None
+    llm_rpm: int = 10  # client-side rate limit (requests per minute), below the free-tier limits
+    llm_timeout: float = 60.0  # seconds; free tiers sometimes hang instead of failing
+    embed_texts_per_minute: int = 80  # Gemini free tier: 100 texts/min (each text counts)
     embed_provider: str = "gemini"
     embed_model: str | None = None
 
@@ -76,6 +91,20 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: SecretStr = SecretStr("graphrag-dev-password")
 
+    chunk_tokens: int = 512  # chunk budget incl. the title/section prefix (~4 characters per token)
+    chunk_overlap_tokens: int = 64  # trailing sentences repeated at the start of the next chunk
+
+    # retrieval (Phase 2)
+    reranker: str = "cross-encoder"  # cross-encoder | none
+    top_k: int = 8  # passages given to the answering LLM
+    candidate_k: int = 30  # first-stage candidates the reranker reorders
+    hops: int = 2  # graph expansion depth
+    max_nodes: int = 40  # node limit for the expanded subgraph
+    # safety net only: entities with more edges are not expanded through. Measured here: the
+    # high-degree nodes are the main banks (max 53), the useless connectors are LOCATIONs
+    # (handled by type), so the limit is set above anything in this corpus.
+    hub_degree: int = 100
+
     def _api_key(self, provider: str) -> str:
         key = getattr(self, f"{provider}_api_key") or self.llm_api_key
         if key is None or not key.get_secret_value():
@@ -83,14 +112,20 @@ class Settings(BaseSettings):
             raise RuntimeError(f"No API key for '{provider}': set {env_var} in .env")
         return key.get_secret_value()
 
-    def chat_endpoint(self) -> Endpoint:
-        preset = _preset(self.llm_provider)
-        return Endpoint(
-            self.llm_provider,
-            preset.base_url,
-            self.llm_model or preset.chat_model,
-            self._api_key(self.llm_provider),
-        )
+    def chat_endpoint(self, role: str = "extract") -> Endpoint:
+        """role="extract" -> LLM_*; role="answer" -> ANSWER_* if set, else LLM_*."""
+        provider, model = self.llm_provider, self.llm_model
+        if role == "answer" and self.answer_provider:
+            provider, model = self.answer_provider, self.answer_model
+        elif role == "answer" and self.answer_model:
+            model = self.answer_model
+        preset = _preset(provider)
+        # an explicitly chosen model means exactly that model, not the preset's fallbacks
+        fallbacks = preset.fallback_models if model is None else ()
+        if self.llm_fallback_models is not None and provider == self.llm_provider:
+            fallbacks = tuple(m.strip() for m in self.llm_fallback_models.split(",") if m.strip())
+        return Endpoint(provider, preset.base_url, model or preset.chat_model,
+                        self._api_key(provider), fallback_models=fallbacks)
 
     def embed_endpoint(self) -> Endpoint:
         preset = _preset(self.embed_provider)

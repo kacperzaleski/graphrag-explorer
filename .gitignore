@@ -11,9 +11,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
-# data and caches (raw docs are re-downloadable, LLM cache is local cost-saving state)
-data/raw/*
-!data/raw/.gitkeep
+# caches: local cost-saving state (data/raw IS committed: eval gold chunk ids need exact text)
 .cache/
 
 # frontend

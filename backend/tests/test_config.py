@@ -49,3 +49,14 @@ def test_fixed_size_embeddings_send_no_dimensions():
 
 def test_secrets_are_not_printed():
     assert "g-key" not in repr(make(gemini_api_key="g-key"))
+
+
+def test_answer_model_defaults_to_extraction_model():
+    s = make(gemini_api_key="g")
+    assert s.chat_endpoint("answer") == s.chat_endpoint("extract")
+
+
+def test_separate_answer_provider():
+    s = make(gemini_api_key="g", cerebras_api_key="c", answer_provider="cerebras")
+    assert s.chat_endpoint("extract").provider == "gemini"
+    assert s.chat_endpoint("answer").provider == "cerebras"

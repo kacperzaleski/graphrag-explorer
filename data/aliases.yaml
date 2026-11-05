@@ -1,0 +1,56 @@
+# Curated entity aliases: canonical name -> variants that mean the same real-world entity.
+# Only add a variant when you are sure it is the SAME entity (a false merge invents relations).
+# Candidates are suggested by `python -m backend.ingest --alias-candidates`; review them by hand.
+# Matching is on the normalized form (case, accents, umlauts, punctuation, legal suffixes ignored),
+# so "Erste Group Bank AG" and "ERSTE GROUP BANK" need no entry; "Erste Group Bank" vs "Erste Group" does.
+#
+# DRAFT 2026-11-05 by Claude, to be reviewed by Kacper. Lines marked REVIEW are judgement calls.
+
+# --- clear cases: short form / abbreviation / legal-form variants of the same organisation -------
+Austrian Trade Union Federation: [ÖGB, Österreichischer Gewerkschaftsbund]
+Cerberus Capital Management: [Cerberus, "Cerberus Capital Management, L.P."]
+GoldenTree Asset Management: [GoldenTree]
+European Central Bank: [ECB]
+Single Supervisory Mechanism: [SSM, ECB Banking Supervision, European Banking Supervision]
+BayernLB: [Bayerische Landesbank]
+Financial Market Authority (Austria): [Financial Market Authority, FMA, Finanzmarktaufsicht]
+Erste Group: [Erste Group Bank, Erste Bank Group]
+Raiffeisen Zentralbank: [RZB, Raiffeisen Zentralbank Österreich]
+Raiffeisen International Bank-Holding: [Raiffeisen International Bankholding]
+Hypo Alpe-Adria-Bank International:
+  - Hypo Alpe Adria Bank
+  - Hypo Alpe Adria
+  - Hypo Group Alpe Adria
+  - Hypo-Alpe-Adria International
+  - Hypo Alpe-Adria-Bank International Group
+Heta Asset Resolution: [HETA, Heta]
+KBC Group: [KBC]
+Talecris Biotherapeutics: [Talecris]
+Thema International Fund: [Thema Fund]
+Refco scandal: [Refco fraud scandal]
+Phillip R. Bennett: [Phillip Bennett]
+Social Democratic Party of Austria: [Social Democratic Party, SPÖ, social democrats]
+Bosnia and Herzegovina: [Bosnia-Herzegovina]
+Klagenfurt: [Klagenfurt am Wörthersee]
+
+# --- REVIEW: renames over time. Same institution, different name in different years. ------------
+# Merging gives one node per institution (good for "who owned X" chains); keeping them apart
+# preserves history (good for "what was X called in 2005"). I merged where the article itself
+# treats them as one continuing bank.
+# REVIEW: BAWAG (pre-2005) -> BAWAG PSK (after the PSK merger) -> BAWAG Group (listed holding, 2017)
+BAWAG Group: [BAWAG, BAWAG PSK, BAWAG P.S.K., Bawag P.S.K. Group]
+# REVIEW: Bank Austria Creditanstalt (BA-CA) was renamed UniCredit Bank Austria after UniCredit took over
+UniCredit Bank Austria: [Bank Austria, BA-CA, Bank Austria Creditanstalt]
+# REVIEW: UNIQA's former company name
+Uniqa Insurance Group: [UNIQA Versicherungen]
+
+# --- REVIEW: left OUT on purpose (uncomment if you disagree) -------------------------------------
+# Predecessor holding renamed in 2010; merging links RBI to pre-2010 facts:
+# Raiffeisen Bank International: [Raiffeisen International Bank-Holding]
+# The state vs. its government: for ownership ("nationalised by ...") they act as one owner:
+# Republic of Austria: [Government of Austria, Austrian federal government]
+# "Erste Bank" is ambiguous: the group's old name AND the Austrian subsidiary Erste Bank Oesterreich.
+# Creditanstalt-Bankverein (after the 1934 merger with Wiener Bankverein) vs. Creditanstalt:
+# Creditanstalt: [Creditanstalt-Bankverein]
+# Same name, plausibly the same person in the Creditanstalt context:
+# Louis Nathaniel de Rothschild: [Louis de Rothschild]
