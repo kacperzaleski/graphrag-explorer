@@ -125,6 +125,10 @@ class RelationRecord:
     type: str
     target: str
     evidence: dict[str, str] = field(default_factory=dict)  # chunk id -> quote
+    # set by the enrichment pass (OWNS / ACQUIRED / MERGED_WITH only)
+    start_year: int | None = None
+    end_year: int | None = None
+    stake_percent: float | None = None
 
     @property
     def id(self) -> str:

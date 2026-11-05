@@ -8,7 +8,8 @@
 
 # --- clear cases: short form / abbreviation / legal-form variants of the same organisation -------
 Austrian Trade Union Federation: [ÖGB, Österreichischer Gewerkschaftsbund]
-Cerberus Capital Management: [Cerberus, "Cerberus Capital Management, L.P."]
+# "Ceberus" is a typo in the Wikipedia source text itself (BAWAG article)
+Cerberus Capital Management: [Cerberus, Ceberus, "Cerberus Capital Management, L.P."]
 GoldenTree Asset Management: [GoldenTree]
 European Central Bank: [ECB]
 Single Supervisory Mechanism: [SSM, ECB Banking Supervision, European Banking Supervision]
@@ -38,7 +39,8 @@ Klagenfurt: [Klagenfurt am Wörthersee]
 # preserves history (good for "what was X called in 2005"). I merged where the article itself
 # treats them as one continuing bank.
 # REVIEW: BAWAG (pre-2005) -> BAWAG PSK (after the PSK merger) -> BAWAG Group (listed holding, 2017)
-BAWAG Group: [BAWAG, BAWAG PSK, BAWAG P.S.K., Bawag P.S.K. Group]
+BAWAG Group: [BAWAG, BAWAG PSK, BAWAG P.S.K., Bawag P.S.K. Group,
+              "Bank für Arbeit und Wirtschaft AG (BAWAG)", Bank für Arbeit und Wirtschaft]
 # REVIEW: Bank Austria Creditanstalt (BA-CA) was renamed UniCredit Bank Austria after UniCredit took over
 UniCredit Bank Austria: [Bank Austria, BA-CA, Bank Austria Creditanstalt]
 # REVIEW: UNIQA's former company name

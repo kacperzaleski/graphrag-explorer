@@ -70,6 +70,34 @@ class GraphRepository:
                    relations, chunks""", key=key, chunk_limit=chunk_limit)
         return dict(records[0]) if records else None
 
+    async def insights(self, limit: int = 10) -> dict:
+        """Precomputed graph analytics (see backend/analytics.py) as ranked lists."""
+        def ranked(order_by: str, where: str) -> str:
+            return f"""
+                MATCH (e:Entity) WHERE {where}
+                RETURN e.key AS key, e.name AS name, e.type AS type, e.degree AS degree,
+                       e.owner_rank AS owner_rank, e.group_size AS group_size,
+                       e.betweenness AS betweenness, e.community AS community
+                ORDER BY {order_by} DESC LIMIT $limit"""
+
+        result = {}
+        for name, order_by, where in [
+            ("top_owners", "e.owner_rank", "e.group_size > 0"),
+            ("largest_groups", "e.group_size", "e.group_size > 0"),
+            ("bridges", "e.betweenness", "e.betweenness > 0"),
+        ]:
+            records, _, _ = await self.driver.execute_query(ranked(order_by, where), limit=limit)
+            result[name] = [dict(r) for r in records]
+        records, _, _ = await self.driver.execute_query("""
+            MATCH (e:Entity) WHERE e.community IS NOT NULL
+            WITH e.community AS id, e ORDER BY e.degree DESC
+            WITH id, collect({key: e.key, name: e.name, type: e.type})[..6] AS members,
+                 count(*) AS size
+            WHERE size >= 3
+            RETURN id, size, members ORDER BY size DESC LIMIT $limit""", limit=limit)
+        result["communities"] = [dict(r) for r in records]
+        return result
+
     async def chunks(self, ids: list[str]) -> list[dict]:
         records, _, _ = await self.driver.execute_query("""
             UNWIND $ids AS id MATCH (c:Chunk {id: id})

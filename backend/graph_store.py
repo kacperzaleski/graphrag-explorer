@@ -4,7 +4,8 @@ Graph schema:
   (:Chunk {id, doc, title, section, text, url, embedding})
   (:Entity {key, name, type, description, aliases, search_text, mention_count})
   (:Chunk)-[:MENTIONS]->(:Entity)
-  (:Entity)-[:RELATES {id, type, chunk_ids, evidence}]->(:Entity)
+  (:Entity)-[:RELATES {id, type, chunk_ids, evidence,
+                       start_year?, end_year?, stake_percent?}]->(:Entity)  (? = enrichment)
 
 Relation types are a property of one Neo4j relationship type (RELATES) instead of separate types
 (:OWNS, :SUPERVISES...): Cypher cannot parameterize relationship types, and one type keeps the
@@ -92,13 +93,27 @@ async def write_graph(driver: AsyncDriver, graph: ResolvedGraph) -> None:
     """)
 
     relations = [{"id": r.id, "source": r.source, "target": r.target, "type": r.type,
-                  "chunk_ids": sorted(r.evidence), "evidence": [r.evidence[c] for c in
-                                                                sorted(r.evidence)]}
+                  "chunk_ids": sorted(r.evidence),
+                  "evidence": [r.evidence[c] for c in sorted(r.evidence)],
+                  "start_year": r.start_year, "end_year": r.end_year,
+                  "stake_percent": r.stake_percent}
                  for r in graph.relations.values()]
     await _unwind(driver, relations, """
         MATCH (s:Entity {key: row.source}), (t:Entity {key: row.target})
         MERGE (s)-[r:RELATES {type: row.type}]->(t)
-        SET r.id = row.id, r.chunk_ids = row.chunk_ids, r.evidence = row.evidence
+        SET r.id = row.id, r.chunk_ids = row.chunk_ids, r.evidence = row.evidence,
+            r.start_year = row.start_year, r.end_year = row.end_year,
+            r.stake_percent = row.stake_percent
+    """)
+
+
+async def write_metrics(driver: AsyncDriver, metrics: dict[str, dict]) -> None:
+    """Graph analytics from backend/analytics.py, stored as entity properties."""
+    rows = [{"key": k, **m} for k, m in metrics.items()]
+    await _unwind(driver, rows, """
+        MATCH (e:Entity {key: row.key})
+        SET e.owner_rank = row.owner_rank, e.group_size = row.group_size,
+            e.betweenness = row.betweenness, e.community = row.community
     """)
 
 

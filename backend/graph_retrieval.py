@@ -41,6 +41,7 @@ class Node:
     type: str
     degree: int = 0
     hop: int = 0  # distance from the nearest seed
+    community: int | None = None
 
 
 @dataclass
@@ -88,7 +89,8 @@ async def expand(driver: AsyncDriver, seeds: list[Node], chunk_relevance: dict[s
             MATCH (n:Entity {key: key})-[r:RELATES]-(m:Entity)
             RETURN r.id AS id, r.type AS type, r.chunk_ids AS chunk_ids,
                    startNode(r).key AS source, endNode(r).key AS target,
-                   m.key AS key, m.name AS name, m.type AS node_type, m.degree AS degree""",
+                   m.key AS key, m.name AS name, m.type AS node_type, m.degree AS degree,
+                   m.community AS community""",
             keys=sources)
 
         def relevance(r) -> tuple[float, int]:
@@ -103,7 +105,8 @@ async def expand(driver: AsyncDriver, seeds: list[Node], chunk_relevance: dict[s
                 if len(graph.nodes) >= max_nodes:
                     graph.truncated = True
                     continue
-                node = Node(r["key"], r["name"], r["node_type"], r["degree"], hop)
+                node = Node(r["key"], r["name"], r["node_type"], r["degree"], hop,
+                            r["community"])
                 graph.nodes[node.key] = node
                 next_frontier.append(node)
             _add_edge(graph, r)
@@ -167,7 +170,8 @@ def subgraph_to_dict(graph: Subgraph, used_edges: set[str] = frozenset()) -> dic
     return {
         "seeds": graph.seeds,
         "truncated": graph.truncated,
-        "nodes": [{"key": n.key, "name": n.name, "type": n.type, "degree": n.degree, "hop": n.hop}
+        "nodes": [{"key": n.key, "name": n.name, "type": n.type, "degree": n.degree, "hop": n.hop,
+                   "community": n.community}
                   for n in graph.nodes.values()],
         "edges": [{"id": eid, "source": graph.edge_ends[eid][0], "target": graph.edge_ends[eid][1],
                    "type": e.type, "chunk_ids": e.chunk_ids, "on_path": eid in graph.path_edges,
@@ -208,6 +212,8 @@ async def load_nodes(driver: AsyncDriver, keys: list[str]) -> list[Node]:
         return []
     records, _, _ = await driver.execute_query("""
         UNWIND $keys AS key MATCH (e:Entity {key: key})
-        RETURN e.key AS key, e.name AS name, e.type AS type, e.degree AS degree""", keys=keys)
-    by_key = {r["key"]: Node(r["key"], r["name"], r["type"], r["degree"]) for r in records}
+        RETURN e.key AS key, e.name AS name, e.type AS type, e.degree AS degree,
+               e.community AS community""", keys=keys)
+    by_key = {r["key"]: Node(r["key"], r["name"], r["type"], r["degree"], 0, r["community"])
+              for r in records}
     return [by_key[k] for k in keys if k in by_key]  # keep the caller's (relevance) order

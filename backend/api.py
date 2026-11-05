@@ -37,6 +37,7 @@ from backend.schemas import (
     Citation,
     EntityHit,
     Health,
+    Insights,
     NodeDetails,
     Subgraph,
     Usage,
@@ -197,6 +198,12 @@ async def node(graph: GraphDep, node_id: str):
     if result is None:
         raise HTTPException(404, f"entity '{node_id}' not found")
     return result
+
+
+@app.get("/graph/insights", response_model=Insights)
+async def insights(graph: GraphDep, limit: Annotated[int, Query(ge=1, le=50)] = 10):
+    """Graph analytics: influential owners, largest groups, bridge entities, communities."""
+    return await graph.insights(limit)
 
 
 @app.get("/graph/stats")

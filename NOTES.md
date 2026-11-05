@@ -558,3 +558,82 @@ protection, not authentication: curl ignores it.
   `stake`), extracted by the LLM. That is the standard **temporal knowledge graph** design (or reification:
   an `:Ownership` node with properties). Today the evidence quote on each edge carries the time context, and
   the UI shows it.
+
+### Phase 3 quiz: model answers
+**Q1: Why must liveness not check Neo4j?** If Neo4j is down for 2 minutes, *all* API pods fail liveness at
+once and Kubernetes restarts all of them. Restarting doesn't fix the database, so they fail again and you get a
+restart loop (CrashLoopBackOff, with growing back-off). When Neo4j returns, the pods are mid-restart (7 s model
+load plus back-off), so **a 2-minute DB outage becomes a longer API outage**: a cascading failure. With
+readiness, pods stay alive and warm, just receive no traffic, and are back immediately.
+Rule: liveness = "would a restart fix *this process*?", readiness = "can I serve *right now*?".
+
+**Q2: Why a ContextVar, not a global?** One process serves many requests concurrently on one event loop. A
+global is shared: request A awaits the LLM, B starts and overwrites the ID, and A's later log lines carry B's
+ID, so **the logs lie**. A ContextVar holds one value **per asyncio task**.
+
+**Q3: Why test with fakes (dependency overrides)?** The tests inject `FakeGraph`/`FakePipeline`, so there's no
+DB, LLM or embeddings. For CI, that means:
+- **deterministic** (no flaky failures because a provider returned 503; flaky tests teach people to ignore red builds)
+- **fast** (about 1 s, so it can run on every commit)
+- **no secrets and no cost** in CI
+- it tests **our** contract (validation, status codes, response shape), not a vendor's uptime.
+
+Real-DB behaviour belongs in separate **integration tests** (a Neo4j container in the pipeline, run less often):
+the **test pyramid**, with many fast unit tests, fewer integration tests, and very few end-to-end tests.
+
+---
+
+## Phase 4 (backend part): enrichment and graph analytics
+
+### Multi-pass extraction: time and stake on ownership edges (`backend/enrichment.py`)
+- Problem: the graph had no time dimension (`BayernLB OWNS BAWAG` was true only in the 1990s).
+- Options considered: (A) leave it, (B) a targeted second pass, (C) re-extract everything with a bigger
+  schema (157 calls, the whole cache invalidated, a day of free-tier quota). **Chose B.**
+- The second pass reads only OWNS/ACQUIRED/MERGED_WITH edges together with their passage (6 passages per call)
+  and extracts `start_year`, `end_year` and `stake_percent`. **15 calls, 204 relations enriched.**
+  This is the general pattern: **broad, cheap first pass; focused enrichment where the value is.**
+- Same defences: structured output, per-item validation, and **numeric grounding** (a year or percentage
+  must literally occur in the passage). 17 values were dropped that way.
+- It runs inside `ingest` and is cached, so the DB is still a pure function of the inputs.
+- Simplification: one edge can merge several statements (bought 46% in 1995, sold in 2004), so I store the
+  earliest start, the latest end, and the stake from the latest dated statement. A proper temporal model
+  would store one edge per period, or an `:Ownership` node per period (**reification**).
+- Result: BAWAG's ownership history is now readable from the graph: BayernLB 46% (1995) → ÖGB 100% (2004)
+  → Cerberus 90% (2006) → GoldenTree 21.8% today.
+
+### Graph analytics for discovery (`backend/analytics.py`, `GET /graph/insights`)
+Computed with networkx **at ingest time** and stored on the nodes: the graph only changes on ingest, the
+metrics cost O(V·E), and the UI can sort and colour by them for free. At scale: Neo4j **Graph Data
+Science** (GDS), running the same algorithms inside the database.
+
+| Metric | Exploration question | How |
+|---|---|---|
+| `owner_rank` | Who controls the most, directly or indirectly? | **PageRank** on ownership edges *reversed* (owned → owner): an owner scores high if it owns important things, which themselves own things. Better than out-degree, which only sees direct holdings. |
+| `group_size` | How big is this corporate group? | Number of entities reachable via OWNS chains (graph descendants). |
+| `betweenness` | Who connects otherwise separate worlds? | **Betweenness centrality**: the share of all shortest paths that pass through the node. High = a broker or bridge. |
+| `community` | Which entities belong together? | **Louvain** modularity optimization: groups with dense edges inside and sparse edges between. Fixed seed, so it's deterministic. |
+
+- PageRank intuition: a random walker follows "is owned by" edges and, with probability 0.15, jumps to a random
+  node (damping 0.85). Where it spends the most time = ultimate controllers. The random jumps guarantee
+  convergence even with dead ends and cycles.
+- Modularity = (edges inside communities) − (edges expected there by chance, given the degrees). Louvain
+  greedily moves nodes between communities to maximize it, then merges communities and repeats. Caveats:
+  resolution limit (small communities can get merged), and results depend on the random order, hence the seed.
+- LOCATION nodes are excluded from betweenness and communities ("Vienna" would be the top bridge and glue
+  everything together). It's the same rule as in retrieval.
+- Results look right: the ECB is the top bridge (it supervises banks from every group), and the communities
+  match the real banking groups (Erste plus its CEE savings banks; UniCredit plus Bank Austria and HypoVereinsbank;
+  the Raiffeisen sector; the Hypo Alpe Adria/BayernLB complex; Cerberus's portfolio).
+
+### An extraction error that distorted a global metric (good DS story)
+"SIA" showed up as a top-5 owner with a 40-entity group. The cause: the passage *"the card business … was
+sold to SIA"* was extracted as `SIA ACQUIRED UniCredit`, so PageRank handed SIA all of UniCredit's weight.
+- Lesson 1: **a single wrong edge can distort a global metric.** Always sanity-check the top of any
+  ranking against domain knowledge, because errors concentrate there (an extreme value is often a bug).
+- Lesson 2: the fix was to use only `OWNS` for ownership metrics. `ACQUIRED` often describes deals on *parts* of
+  a company (units, stakes), and real takeovers produce an `OWNS` edge as well. A cleaner fix would be a prompt
+  rule ("the target of a partial deal is the unit, not the parent"), but that needs re-extraction.
+- Remaining caveat: **cross-holdings** (RZB ↔ Uniqa each own part of the other) are real and create cycles.
+  Group size then counts the same group from both sides. A stake-weighted control model (multiplying stake
+  percentages along chains) would fix that and is the standard approach in ownership analysis
+  ("ultimate beneficial owner", UBO).

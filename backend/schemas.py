@@ -40,6 +40,7 @@ class GraphNode(BaseModel):
     type: str
     degree: int | None = None
     hop: int = 0
+    community: int | None = None
 
 
 class GraphEdge(BaseModel):
@@ -118,6 +119,36 @@ class NodeDetails(BaseModel):
     mention_count: int | None = None
     relations: list[Relation]
     chunks: list[Passage]
+
+
+class RankedEntity(BaseModel):
+    key: str
+    name: str
+    type: str
+    degree: int | None = None
+    owner_rank: float | None = None
+    group_size: int | None = None
+    betweenness: float | None = None
+    community: int | None = None
+
+
+class CommunityMember(BaseModel):
+    key: str
+    name: str
+    type: str
+
+
+class Community(BaseModel):
+    id: int
+    size: int
+    members: list[CommunityMember]  # most connected first; the first one names the community
+
+
+class Insights(BaseModel):
+    top_owners: list[RankedEntity]  # PageRank over reversed ownership edges
+    largest_groups: list[RankedEntity]  # entities reachable via OWNS chains
+    bridges: list[RankedEntity]  # betweenness centrality
+    communities: list[Community]  # Louvain
 
 
 class Health(BaseModel):

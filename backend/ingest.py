@@ -16,12 +16,13 @@ import json
 import logging
 import time
 
-from backend import graph_store
+from backend import analytics, graph_store
 from backend.cache import DiskCache
 from backend.chunking import Chunk, chunk_document
 from backend.config import REPO_ROOT, Settings, get_settings
 from backend.db import create_driver
 from backend.embeddings import Embedder
+from backend.enrichment import enrich
 from backend.extraction import ChunkExtraction, extract
 from backend.llm import LLM
 from backend.resolution import Resolver, alias_candidates, resolve
@@ -94,6 +95,8 @@ async def main(limit_docs: int | None, show_alias_candidates: bool) -> None:
                          f"re-run later to resume ({llm.usage.calls} new results are cached).")
 
     graph = resolve(extractions, Resolver.from_file())
+    enrichment = await enrich(llm, graph, {c.id: c for c in chunks})
+    print(f"enrichment: {enrichment}")
     if show_alias_candidates:
         print_alias_candidates(graph.entities)
 
@@ -104,6 +107,7 @@ async def main(limit_docs: int | None, show_alias_candidates: bool) -> None:
         await graph_store.write_graph(driver, graph)
         deleted = await graph_store.prune(driver, chunks, graph)
         await graph_store.write_degrees(driver)
+        await graph_store.write_metrics(driver, analytics.compute(graph))
         counts = await graph_store.stats(driver)
     finally:
         await driver.close()
