@@ -89,6 +89,8 @@ async def expand(driver: AsyncDriver, seeds: list[Node], chunk_relevance: dict[s
             MATCH (n:Entity {key: key})-[r:RELATES]-(m:Entity)
             RETURN r.id AS id, r.type AS type, r.chunk_ids AS chunk_ids,
                    startNode(r).key AS source, endNode(r).key AS target,
+                   r.start_year AS start_year, r.end_year AS end_year,
+                   r.stake_percent AS stake_percent,
                    m.key AS key, m.name AS name, m.type AS node_type, m.degree AS degree,
                    m.community AS community""",
             keys=sources)
@@ -154,7 +156,9 @@ async def add_paths(driver: AsyncDriver, graph: Subgraph, max_len: int, hub_degr
         WHERE all(n IN nodes(p)[1..-1] WHERE n.degree <= $hub_degree AND n.type <> 'LOCATION')
         UNWIND relationships(p) AS r
         RETURN DISTINCT r.id AS id, r.type AS type, r.chunk_ids AS chunk_ids,
-               startNode(r).key AS source, endNode(r).key AS target""",
+               startNode(r).key AS source, endNode(r).key AS target,
+               r.start_year AS start_year, r.end_year AS end_year,
+               r.stake_percent AS stake_percent""",
         pairs=[[a, b] for i, a in enumerate(graph.seeds) for b in graph.seeds[i + 1:]],
         hub_degree=hub_degree)
     for r in records:
@@ -175,7 +179,8 @@ def subgraph_to_dict(graph: Subgraph, used_edges: set[str] = frozenset()) -> dic
                   for n in graph.nodes.values()],
         "edges": [{"id": eid, "source": graph.edge_ends[eid][0], "target": graph.edge_ends[eid][1],
                    "type": e.type, "chunk_ids": e.chunk_ids, "on_path": eid in graph.path_edges,
-                   "used": eid in used_edges}
+                   "used": eid in used_edges, "start_year": e.start_year,
+                   "end_year": e.end_year, "stake_percent": e.stake_percent}
                   for eid, e in graph.edges.items()],
     }
 
@@ -193,7 +198,9 @@ def _name_coverage(names: list[str], question_words: set[str]) -> float:
 def _add_edge(graph: Subgraph, r) -> None:
     if r["id"] in graph.edges:
         return
-    graph.edges[r["id"]] = Edge(r["id"], r["source"], r["type"], r["target"], list(r["chunk_ids"]))
+    graph.edges[r["id"]] = Edge(r["id"], r["source"], r["type"], r["target"],
+                                list(r["chunk_ids"]), r["start_year"], r["end_year"],
+                                r["stake_percent"])
     graph.edge_ends[r["id"]] = (r["source"], r["target"])
 
 

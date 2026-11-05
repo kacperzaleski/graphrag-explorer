@@ -94,7 +94,7 @@ async def main(limit_docs: int | None, show_alias_candidates: bool) -> None:
         raise SystemExit(f"{len(failed)} chunks failed (quota/outage?). Nothing written to Neo4j; "
                          f"re-run later to resume ({llm.usage.calls} new results are cached).")
 
-    graph = resolve(extractions, Resolver.from_file())
+    graph = resolve(extractions, Resolver.from_file(), {c.doc: c.title for c in chunks})
     enrichment = await enrich(llm, graph, {c.id: c for c in chunks})
     print(f"enrichment: {enrichment}")
     if show_alias_candidates:

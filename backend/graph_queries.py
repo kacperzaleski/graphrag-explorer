@@ -57,7 +57,9 @@ class GraphRepository:
                 MATCH (e)-[r:RELATES]-(m:Entity)
                 RETURN collect({id: r.id, type: r.type, outgoing: startNode(r) = e,
                                 other_key: m.key, other_name: m.name, other_type: m.type,
-                                chunk_ids: r.chunk_ids, evidence: r.evidence}) AS relations
+                                chunk_ids: r.chunk_ids, evidence: r.evidence,
+                                start_year: r.start_year, end_year: r.end_year,
+                                stake_percent: r.stake_percent}) AS relations
             }
             CALL (e) {
                 MATCH (c:Chunk)-[:MENTIONS]->(e)

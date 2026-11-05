@@ -51,6 +51,9 @@ class GraphEdge(BaseModel):
     chunk_ids: list[str] = []
     on_path: bool = False
     used: bool = False  # the answer relied on this edge
+    start_year: int | None = None  # enrichment pass, ownership-like edges only
+    end_year: int | None = None
+    stake_percent: float | None = None
 
 
 class Subgraph(BaseModel):
@@ -98,6 +101,9 @@ class Relation(BaseModel):
     other_type: str
     chunk_ids: list[str]
     evidence: list[str]
+    start_year: int | None = None
+    end_year: int | None = None
+    stake_percent: float | None = None
 
 
 class Passage(BaseModel):

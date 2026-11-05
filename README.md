@@ -3,7 +3,7 @@
 Documents → knowledge graph → hybrid graph + vector retrieval → FastAPI → React graph explorer.
 An end-to-end demo of taking GraphRAG from scripts to an app, with tests, evaluation and CI/CD.
 
-> Work in progress, built in phases. Status: **Phase 3 (API) done.**
+> Work in progress, built in phases. Status: **Phase 4 (React explorer) done.**
 
 ## Setup (so far)
 
@@ -16,6 +16,7 @@ uv run python -m backend.ingest --alias-candidates   # builds the graph (idempot
 uv run --group prototype streamlit run prototype/app.py   # throwaway prototype UI
 uv run python -m backend.pipeline "How is ÖGB connected to GoldenTree?"   # CLI, --mode vector|graph
 uv run uvicorn backend.api:app --no-access-log   # API, docs at http://localhost:8000/docs
+cd frontend && npm install && npm run dev            # explorer at http://localhost:5173
 uv run pytest
 ```
 

@@ -98,7 +98,8 @@ class EntityRecord:
     key: str
     names: Counter = field(default_factory=Counter)  # surface forms as written in the chunks
     types: Counter = field(default_factory=Counter)
-    descriptions: list[str] = field(default_factory=list)
+    descriptions: list[tuple[str, str]] = field(default_factory=list)  # (chunk id, text)
+    own_doc_slugs: set[str] = field(default_factory=set)  # articles about this entity
     chunk_ids: set[str] = field(default_factory=set)
     canonical: str | None = None  # from the alias file
 
@@ -116,7 +117,11 @@ class EntityRecord:
 
     @property
     def description(self) -> str:
-        return max(self.descriptions, key=len, default="")
+        """From the earliest chunk that describes it: for entities with their own article that is
+        the article's intro ("BAWAG is an Austrian bank..."), not a side remark elsewhere."""
+        if not self.descriptions:
+            return ""
+        return min(self.descriptions, key=lambda d: _chunk_order(d[0], self.own_doc_slugs))[1]
 
 
 @dataclass
@@ -142,8 +147,10 @@ class ResolvedGraph:
     mentions: set[tuple[str, str]]  # (chunk id, entity key)
 
 
-def resolve(extractions: list[ChunkExtraction], resolver: Resolver) -> ResolvedGraph:
-    """Merge per-chunk extractions into one graph keyed by resolved entity keys."""
+def resolve(extractions: list[ChunkExtraction], resolver: Resolver,
+            doc_titles: dict[str, str] | None = None) -> ResolvedGraph:
+    """Merge per-chunk extractions into one graph keyed by resolved entity keys.
+    doc_titles (doc slug -> article title) marks entities that have their own article."""
     entities: dict[str, EntityRecord] = {}
     relations: dict[str, RelationRecord] = {}
     mentions: set[tuple[str, str]] = set()
@@ -156,7 +163,7 @@ def resolve(extractions: list[ChunkExtraction], resolver: Resolver) -> ResolvedG
             record.types[e.type] += 1
             record.canonical = record.canonical or resolver.alias_name(e.name)
             if e.description:
-                record.descriptions.append(e.description)
+                record.descriptions.append((ex.chunk_id, e.description))
             record.chunk_ids.add(ex.chunk_id)
             mentions.add((ex.chunk_id, key))
 
@@ -169,7 +176,15 @@ def resolve(extractions: list[ChunkExtraction], resolver: Resolver) -> ResolvedG
             record = RelationRecord(source, r.type, target)
             record = relations.setdefault(record.id, record)
             record.evidence.setdefault(ex.chunk_id, r.evidence)
+    for doc, title in (doc_titles or {}).items():
+        if (key := resolver.key(title)) in entities:
+            entities[key].own_doc_slugs.add(doc)
     return ResolvedGraph(entities, relations, mentions)
+
+
+def _chunk_order(chunk_id: str, own_docs: set[str]) -> tuple[bool, str]:
+    """Chunks of the entity's own article first, then by position ("bawag#000" < "bawag#005")."""
+    return chunk_id.split("#")[0] not in own_docs, chunk_id
 
 
 # first words shared by unrelated names ("European Central Bank" / "European Commission")

@@ -30,3 +30,11 @@ def test_verify_removes_invented_citations():
     result = verify(parsed, CHUNKS, EDGES)
     assert result.cited_chunks == [] and result.used_edges == []
     assert len(result.issues) == 3  # unknown passages, unknown edge, claims support without any
+
+
+def test_edge_qualifiers_reach_the_prompt():
+    edge = Edge("bayernlb|OWNS|bawag", "BayernLB", "OWNS", "BAWAG", ["bawag#002"], 1995, 2004, 46.0)
+    assert edge.qualifier() == "46%, 1995-2004"
+    assert Edge("x", "A", "OWNS", "B", start_year=2006).qualifier() == "2006"
+    _, user = build_messages("q", CHUNKS, [edge])
+    assert "E1: BayernLB -[OWNS]-> BAWAG (46%, 1995-2004)" in user["content"]

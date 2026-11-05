@@ -637,3 +637,59 @@ sold to SIA"* was extracted as `SIA ACQUIRED UniCredit`, so PageRank handed SIA 
   Group size then counts the same group from both sides. A stake-weighted control model (multiplying stake
   percentages along chains) would fix that and is the standard approach in ownership analysis
   ("ultimate beneficial owner", UBO).
+
+---
+
+## Phase 4: React graph explorer (`frontend/`)
+
+Run: `cd frontend && npm install && npm run dev` → http://localhost:5173 (API on :8000).
+
+### What a user can do (and why each feature exists)
+| Feature | Discovery value |
+|---|---|
+| **Insights tab** (starting points) | "Where do I even start?" Rankings from graph analytics: influential owners, bridges, communities. Click to open. |
+| **Search** (type-ahead) | Jump to a known entity; debounced, stale responses ignored |
+| **Click a node** | Expands its neighbours (once) and opens the **entity card**: description, aliases, connections with **year and stake**, the **evidence quote** for each, and the source passages with a Wikipedia link |
+| **Connect tab** (path finder) | "How are A and B connected?" Shortest path, **no LLM**, instant |
+| **Ask tab** | A question in graph or vector mode; answer with citations; the edges used are **highlighted**, everything else is faded |
+| **Legend** | Doubles as a type filter (click to hide); switch colour between *type* and *community* (Louvain) |
+| Limits | Max 150 nodes client-side and 25 neighbours per expand; visible warnings when either limit cuts |
+
+### Design decisions
+- **Never render the full graph.** 726 nodes and 585 edges as a hairball tell nobody anything, and force layouts get
+  slow. The view grows only through user actions (search, expand, path, answer), each one a small subgraph from
+  the API. This is the "**overview first, zoom and filter, details on demand**" mantra (Shneiderman) applied
+  to graphs: the insights give the overview, and the entity card gives the details.
+- **Cytoscape.js over react-force-graph**: CSS-like selectors (`edge.highlighted`, `.faded`, `.hidden`) make
+  highlight and filter *declarative*; `fcose` with `randomize: false` keeps existing nodes in place on expand
+  (the user's mental map survives); new nodes spawn next to the node they were expanded from. We render
+  ≤ 150 nodes, so WebGL (react-force-graph's strength) brings nothing.
+- **React owns the data, Cytoscape owns rendering.** The `GraphView` component diffs the React state against
+  the Cytoscape elements (adds new ones, removes gone ones) instead of re-creating the graph, so positions
+  survive updates. The state lives in a `useReducer` (`useGraph`): merging subgraphs, the node limit and the
+  warnings are pure functions, which are easy to reason about.
+- **Typed API client** (`src/api/types.ts` mirrors `backend/schemas.py`). It caught real drift during development:
+  I added time fields to the backend edge model and `tsc` failed until the frontend type matched. Next step
+  for a team: **generate** the TS types from the OpenAPI schema (`openapi-typescript`), so there's one source of truth.
+- **Errors carry the request ID** (`ApiError.requestId`): a user-visible error can be matched to the server log
+  line. FastAPI 422 details are rendered as "field: message".
+- **Race condition in type-ahead**: responses can arrive out of order ("ra" after "raif"). A request counter
+  drops stale responses. A 250 ms debounce means about 1 request per typed word instead of one per keystroke.
+- **Size encodes degree in the whole graph**, not on screen: a big node means "much more behind this one, worth
+  expanding".
+- Accessibility and limits: colours are not the only signal (labels, legend counts, a selected border).
+  The 800 kB bundle is mostly Cytoscape; code-splitting would be the next step for a production build.
+
+### Small bugs found by the headless browser test (Playwright)
+- After `fit`, a 3-node graph zoomed in until labels overlapped: cap the zoom after layout, and use
+  `min-zoomed-font-size` to hide labels when zoomed far out.
+- The entity description was "the longest one", which for BAWAG was a side remark about a 2007 discrimination affair.
+  Now it's the description from the entity's **own article intro** (falling back to the earliest chunk):
+  "A bank in Austria founded in 1922 and later merged to form BAWAG PSK."
+- React lint (`oxlint`) flagged `setState` directly inside effects. Fixed by remounting the panel per entity
+  (`key={nodeKey}`) and deriving values during render, which avoids extra render cycles.
+
+**Follow-up:** *"How would this scale to a graph with millions of nodes?"* The UI already never loads
+the full graph, so it scales with *what is on screen*, not with graph size. The server-side limits (neighbours per
+expand, path length) keep each request bounded. For overview at scale: precomputed aggregates (community-level
+graph, one node per community) and server-side layout, or WebGL rendering (sigma.js) for big overview maps.

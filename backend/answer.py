@@ -49,6 +49,17 @@ class Edge:
     type: str
     target: str
     chunk_ids: list[str] = field(default_factory=list)
+    start_year: int | None = None  # from the enrichment pass (ownership-like edges only)
+    end_year: int | None = None
+    stake_percent: float | None = None
+
+    def qualifier(self) -> str:
+        """e.g. "46%, 1995-2004" (empty if unknown)."""
+        years = ""
+        if self.start_year or self.end_year:
+            years = f"{self.start_year or '?'}-{self.end_year or ''}".rstrip("-")
+        stake = f"{self.stake_percent:g}%" if self.stake_percent else ""
+        return ", ".join(p for p in (stake, years) if p)
 
 
 @dataclass
@@ -66,6 +77,7 @@ class AnswerResult:
 
 def build_messages(question: str, chunks: list[Hit], edges: list[Edge]) -> list[dict]:
     facts = "\n".join(f"E{i}: {e.source} -[{e.type}]-> {e.target}"
+                      + (f" ({e.qualifier()})" if e.qualifier() else "")
                       for i, e in enumerate(edges, 1)) or "(none)"
     passages = "\n\n".join(f"[{c.id}]\n{c.text}" for c in chunks) or "(none)"
     context = f"GRAPH FACTS:\n{facts}\n\nPASSAGES:\n{passages}"

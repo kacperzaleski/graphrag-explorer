@@ -70,3 +70,18 @@ def test_merged_with_is_stored_once_and_self_loops_vanish():
     graph = resolve(extractions, resolver)
     assert list(graph.relations) == ["bawag|MERGED_WITH|psk"]
     assert set(graph.relations["bawag|MERGED_WITH|psk"].evidence) == {"a#000", "b#000"}
+
+
+def test_description_prefers_the_entitys_own_article_intro():
+    def mention(chunk_id, description):
+        return ChunkExtraction(chunk_id, [ExtractedEntity(name="BAWAG", type="BANK",
+                                                          description=description)])
+
+    extractions = [mention("austrian-bank-list#000", "One of many banks in a list."),
+                   mention("bawag#003", "Merged with PSK."),
+                   mention("bawag#000", "An Austrian bank.")]
+    graph = resolve(extractions, Resolver(), {"bawag": "BAWAG", "austrian-bank-list": "List"})
+    assert graph.entities["bawag"].description == "An Austrian bank."  # own intro wins
+    # without an own article: simply the earliest chunk (deterministic)
+    no_article = resolve(extractions, Resolver())
+    assert no_article.entities["bawag"].description == "One of many banks in a list."
