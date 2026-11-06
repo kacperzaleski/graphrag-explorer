@@ -1,151 +1,191 @@
 # GraphRAG Explorer
 
-Explore how Austrian banks, their owners and regulators are connected, with every fact traceable to its source
-sentence. 22 Wikipedia articles become a knowledge graph in Neo4j. Questions are answered with hybrid
-graph + vector retrieval and citations, and the graph can be browsed, searched and path-searched in a React UI.
+**Explore who owns whom in Austrian banking, and ask questions that are answered with sources.**
 
-```mermaid
-flowchart LR
-    A[22 Wikipedia articles] --> B[Chunking<br/>512 tokens, 64 overlap]
-    B --> C[LLM extraction<br/>Pydantic schema + grounding check]
-    C --> D[Entity resolution<br/>normalization + aliases.yaml]
-    D --> E[Enrichment + analytics<br/>years, stakes, PageRank, Louvain]
-    B --> F[Embeddings]
-    E --> G[(Neo4j<br/>graph + vector + fulltext)]
-    F --> G
-    G --> H[Hybrid retrieval<br/>RRF, seeds, BFS, paths, reranker]
-    H --> I[Answer with citations<br/>+ citation check]
-    I --> J[FastAPI]
-    G --> J
-    J --> K[React + Cytoscape explorer]
-```
+22 Wikipedia articles about Austrian banks, their owners and regulators are turned into a knowledge graph.
+You can click through it, find the path between any two companies, and ask questions in plain English.
+Every fact in the graph links back to the sentence it was taken from.
 
-## Setup in 5 commands
+![BAWAG in the explorer: ownership history with years and stakes](slides/img/2_bawag.png)
 
-```bash
-cp .env.example .env                    # add GEMINI_API_KEY (free at aistudio.google.com)
-uv sync && docker compose up -d neo4j   # Python deps + Neo4j 5 (browser at :7474)
-uv run python -m backend.ingest         # builds the graph (idempotent; LLM calls cached in .cache/)
-uv run uvicorn backend.api:app --no-access-log      # API, docs at http://localhost:8000/docs
-cd frontend && npm install && npm run dev           # explorer at http://localhost:5173
-```
+Things you can find out in a few clicks:
+- BayernLB owned 46% of BAWAG in the 1990s, before the trade union ÖGB bought it back, and Cerberus bought it in 2006.
+- The Refco scandal links an American broker to an Austrian bank sale.
+- Česká spořitelna and Slovenská sporiteľňa are siblings: both belong to Erste Group.
 
-Other useful commands:
+## Features
 
-```bash
-uv run python -m backend.check          # smoke test: Neo4j, chat model, embedding model
-uv run python -m backend.pipeline "How is ÖGB connected to GoldenTree?" --mode graph   # CLI
-uv run python -m eval.run               # evaluation (see below)
-uv run python -m scripts.warm_demo      # pre-caches the demo answers before a talk
-uv run pytest && uv run ruff check .    # 77 tests, lint
-```
-
-Ingestion calls the LLM about 160 times (once per chunk, plus the enrichment pass). If a run fails on quota
-limits, it writes nothing and resumes from the cache on the next run. The corpus is committed in `data/raw/`, and
-`uv run python scripts/fetch_data.py` downloads it again.
+- **Explorer:** search any entity, expand neighbours by clicking, open an entity card with its connections and
+  source quotes. Ownership edges show years and stakes.
+- **Path finder:** the shortest connection between any two entities, instantly and without an LLM.
+- **Insights:** the most influential owners (PageRank), bridges between groups (betweenness), and clusters of
+  banks that belong together (Louvain communities).
+- **Ask:** questions answered from the graph and the articles, with citations. The graph edges the answer used
+  are highlighted.
+- **Evaluation:** a reproducible comparison of graph mode against plain vector RAG, with honest results
+  ([below](#evaluation)).
 
 ## How it works
 
-| Step | What | Where |
-|---|---|---|
-| Extraction | One LLM call per chunk, structured output against a Pydantic schema. Each item is validated on its own; relations whose quote isn't supported by the chunk (word-level, ≥ 0.9) are dropped | `backend/extraction.py` |
-| Resolution | Umlaut transliteration, legal suffixes, and a curated `data/aliases.yaml` for the merges a rule can't make safely | `backend/resolution.py` |
-| Enrichment | A second pass adds start/end year and stake % to ownership edges, numerically grounded in the text | `backend/enrichment.py` |
-| Analytics | PageRank over reversed OWNS edges (influential owners), group size, betweenness (bridges), Louvain communities | `backend/analytics.py` |
-| Retrieval | Vector + fulltext search fused by RRF (k = 60), seed entities from the question, 2-hop BFS with hub control, shortest paths between seeds, cross-encoder reranker, reserved passage slots for path evidence | `backend/search.py`, `backend/graph_retrieval.py` |
-| Answer | Facts + passages → answer with `[chunk]` citations; citations the model didn't see are removed | `backend/answer.py` |
-| API | FastAPI with readiness check, request IDs, JSON logs, concurrency limit, input limits | `backend/api.py` |
-| UI | Search, expand on click, entity cards with source quotes, path finder, insights, ask panel that highlights the edges used | `frontend/src/` |
+![Who does what: LLM, embedding model, and plain code](docs/how_it_works.png)
 
-**Graph schema**
+There are three separate pieces, and the LLM is not the one that searches:
+
+1. **Ingestion (once).** Each article is split into chunks of about 512 tokens.
+   - An **embedding model** turns every chunk into a vector of 768 numbers, which captures what it is about.
+   - An **LLM** reads every chunk and fills in a fixed JSON form: entities, relations, and a quote as evidence.
+     Code checks that the quote is really in the text, and merges names that mean the same thing
+     ("ÖGB" = "Austrian Trade Union Federation").
+   - Everything goes into **Neo4j**: chunks with their vectors, entities, and relations that point back to
+     their source chunk.
+2. **Retrieval (per question), done by code with fixed Cypher queries:**
+   - Vector search and keyword search (BM25) find candidate passages, combined by rank (Reciprocal Rank Fusion).
+   - Entities named in the question become start points. The graph gives the shortest path between them and
+     their neighbours, plus the chunks behind those edges.
+   - A small reranker picks the best 8 passages. Passages that prove a path edge always keep a slot.
+3. **Answer.** The LLM gets the graph facts, the passages and the question, and writes an answer with
+   `[chunk]` citations. Code removes citations of passages the LLM never saw.
+
+The LLM never writes Cypher. **Vector mode**, the baseline, skips the graph: closest chunks, then the
+reranker, then the LLM.
+
+<details>
+<summary>Graph schema</summary>
 
 ```
 (:Chunk {id, doc, title, section, text, url, embedding})-[:MENTIONS]->(:Entity)
 (:Entity {key, name, type, aliases, description, degree, owner_rank, group_size, betweenness, community})
 (:Entity)-[:RELATES {type, chunk_ids, evidence, start_year, end_year, stake_percent}]->(:Entity)
 ```
-Entity types: BANK, COMPANY, PERSON, REGULATOR, GOVERNMENT, LOCATION, EVENT, OTHER. Relation types: OWNS,
-ACQUIRED, MERGED_WITH, SUPERVISES, LEADS, FOUNDED, HEADQUARTERED_IN, INVOLVED_IN, RELATED_TO.
-The current graph has 726 entities and 585 relations.
+Entity types: BANK, COMPANY, PERSON, REGULATOR, GOVERNMENT, LOCATION, EVENT, OTHER.
+Relation types: OWNS, ACQUIRED, MERGED_WITH, SUPERVISES, LEADS, FOUNDED, HEADQUARTERED_IN, INVOLVED_IN,
+RELATED_TO. The current graph has 726 entities and 585 relations.
+</details>
 
-**LLM providers.** All providers go through the OpenAI-compatible API, with a preset each in `backend/config.py`.
-Switch with `LLM_PROVIDER` (`gemini` | `cerebras` | `mistral` | `groq`). Answer and judge models can be set
-separately (`ANSWER_*`, `JUDGE_*`), and embeddings via `EMBED_PROVIDER` (`gemini` | `mistral`). Calls are
-rate-limited, cached on disk by request content, and fall back to the next model on 429/503/timeout.
+## Getting started
+
+**You need:** Docker, [uv](https://docs.astral.sh/uv/), Node.js 20.19 or newer, and a free
+[Gemini API key](https://aistudio.google.com/apikey).
+
+```bash
+git clone <this repo> && cd graphRAG-demo
+cp .env.example .env                    # then put your GEMINI_API_KEY in .env
+uv sync                                 # Python 3.12 environment and dependencies
+docker compose up -d neo4j              # Neo4j 5, browser at http://localhost:7474
+uv run python -m backend.ingest         # builds the graph: about 160 LLM calls, a few minutes
+uv run uvicorn backend.api:app --no-access-log     # API at http://localhost:8000 (docs: /docs)
+cd frontend && npm install && npm run dev          # explorer at http://localhost:5173
+```
+
+Notes:
+- **Ingestion is safe to repeat.** Every LLM and embedding call is cached in `.cache/`, so a second run costs
+  nothing. If the free-tier quota runs out halfway, nothing is written, and the next run continues from the
+  cache.
+- **First question is slow:** the reranker model (about 90 MB) downloads on first use.
+- `uv run python -m backend.check` tests the connection to Neo4j, the chat model and the embedding model.
+
+Questions that work well:
+- *Who have been the owners of BAWAG over time?*
+- *How is BayernLB connected to Addiko Bank?*
+- *Which bank held 46% of BAWAG before the trade union bought it back?*
+- *How is Česká spořitelna connected to Slovenská Sporiteľňa?*
+
+Other commands:
+
+```bash
+uv run python -m backend.pipeline "How is ÖGB connected to GoldenTree?" --mode graph   # ask from the CLI
+uv run python -m eval.run                # run the evaluation
+uv run pytest && uv run ruff check .     # 77 tests (no network needed), lint
+```
+
+## Configuration
+
+All settings are environment variables, set in `.env`; see `.env.example` for the full list.
+
+| Variable | What it does |
+|---|---|
+| `LLM_PROVIDER` | `gemini` (default), `groq`, `cerebras` or `mistral`. All use the OpenAI-compatible API, with presets in `backend/config.py` |
+| `GEMINI_API_KEY`, `GROQ_API_KEY`, ... | key for the chosen provider |
+| `ANSWER_PROVIDER` / `JUDGE_PROVIDER` | a different model for answering or for grading the evaluation |
+| `EMBED_PROVIDER` | `gemini` or `mistral` (changing it means re-ingesting: the vector size changes) |
+| `LLM_RPM` | client-side rate limit, requests per minute |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | database connection |
+
+LLM calls are rate-limited, cached on disk by their content, and fall back to the next model when one is
+overloaded or out of quota.
 
 ## Evaluation
 
-`uv run python -m eval.run` (methodology in `NOTES.md`, Phase 5). The questions are generated from the **text,
-not the graph**, because graph mode would otherwise be graded on its own data. The answers come from Gemini and
-the judge from Groq `gpt-oss-120b`, a different vendor to avoid self-preference bias. A second judge (Qwen)
-checks reliability, and all comparisons are paired.
+`uv run python -m eval.run`. The method is described in `NOTES.md` (Phase 5), and the results are in
+`eval/results.md` and `eval/results_hard.md`.
 
-**Main set: 28 questions** (13 multi-hop, 10 lookup, 5 corpus-wide), `eval/results.md`:
+- The questions are written from the **articles, not from the graph**, so graph mode isn't graded on its own
+  data.
+- An LLM grades the answers against a reference answer. It comes **from a different company** (Groq) than the
+  one answering (Gemini), because models tend to prefer their own style. A second grader checks agreement.
+- Both modes answer the same questions, so the comparison is paired: bootstrap confidence intervals and McNemar's test.
 
-| | vector (baseline) | graph |
+**28 questions** (13 multi-step, 10 lookups, 5 about the whole collection):
+
+| | plain vector RAG | graph |
 |---|---|---|
-| judge score [95% CI] | 0.91 [0.84, 0.98] | 0.93 [0.86, 0.98] |
+| score [95% CI] | 0.91 [0.84, 0.98] | 0.93 [0.86, 0.98] |
 | correct | 23/28 | 24/28 |
-| recall@8 | 0.90 | 0.89 |
-| LLM latency p50 / tokens per question | 1.3 s / 2.9k | 1.3 s / 3.5k |
+| right passages found (recall@8) | 0.90 | 0.89 |
+| answer time (median) / tokens | 1.3 s / 2.9k | 1.3 s / 3.5k |
 
-**Pre-registered hard set: 8 "How is A connected to C?" questions** with a hidden bridge, `eval/results_hard.md`:
+**8 harder "How is A connected to C?" questions**, where the link in between is never named. The prediction
+was written down before the run:
 
-| | vector | graph |
+| | plain vector RAG | graph |
 |---|---|---|
-| judge score | 0.38 | 0.44 (diff +0.06, CI [−0.12, +0.25]) |
+| score | 0.38 | 0.44 (difference +0.06, CI −0.12 to +0.25) |
 | correct | 3/8 | 2/8 |
-| recall@8 (without reranker) | 0.56 (**0.81**) | 0.50 (0.56) |
+| right passages found (without the reranker) | 0.56 (**0.81**) | 0.50 (0.56) |
 
-**Honest reading**
-- On this small, clean corpus, GraphRAG gives **no measurable QA advantage**. The differences are within noise,
-  and graph mode costs about 25% more tokens plus an extraction step.
-- Round 1 hit a **ceiling effect**: generated questions reuse the passages' wording.
-- The pre-registered hypothesis (the graph helps when the bridge is hidden) is **not supported** at n = 8.
-- The largest measured effect: **the reranker hurts** connection questions.
-- The graph's value here lies in what QA accuracy doesn't measure: exploration, provenance, time and stake on
-  ownership, analytics, and errors you can see.
+**What this means**
+- On this small, clean collection, the graph gives **no measurable improvement in answer quality**. The
+  differences are within noise, and graph mode uses about 25% more tokens.
+- The first questions were too easy: they name everything, so plain search finds it too.
+- The prediction that the graph wins on hidden links did not hold up at n = 8.
+- The biggest effect was a surprise: the reranker throws away passages that plain RAG needs.
+- The graph is worth it for what accuracy doesn't measure: exploring, seeing where every fact comes from,
+  time and stakes on ownership, and spotting mistakes.
 
 ## Limitations
 
-- **Extraction recall.** Facts the LLM missed are not in the graph. For example, "Addiko was spun off from Hypo"
-  is missing, so the path finder links BayernLB and Addiko only through the ECB, which supervises both.
-- **Entity resolution** is rules plus a hand-curated alias list, which works at this scale but is not general.
-- **Corpus-wide questions** ("which banks does the ECB supervise?") get partial answers, because top-k retrieval
-  sees at most 8 passages.
-- **Evaluation:** small n, LLM-generated questions, and judge validity still waiting for 10 human labels
-  (`eval/calibration_sheet.md`). Inter-judge agreement is κ = 0.62 / 0.69.
-- **Free-tier APIs:** quotas and latency vary. Not built: auth, multi-tenancy, Docker images for the app, CI.
+- **The graph only knows what was extracted.** "Addiko was spun off from Hypo" was missed, so the path finder
+  links BayernLB and Addiko only through the ECB, which supervises both.
+- **Name merging** is rules plus a hand-checked alias list (`data/aliases.yaml`). That works at this size,
+  but not in general.
+- **"List all..." questions** get partial answers, because the LLM sees at most 8 passages. These need an
+  aggregation query on the graph instead.
+- **Evaluation:** few questions, generated by an LLM, and the grader isn't yet checked against human labels.
+  The two graders agree on 64 of 72 answers (Cohen's κ 0.62 and 0.69).
 
 ## Next steps
 
-1. **Data:** a larger, messier corpus (annual reports, news) where vector RAG should struggle more; incremental
-   ingestion per document.
-2. **Extraction quality:** measure relation precision/recall on a small hand-labelled sample; try a second
-   extraction pass or a stronger model only for chunks with few relations.
-3. **Retrieval:** a router that uses graph mode only for connection/aggregation questions; Cypher aggregation for
-   corpus-wide questions; skip the reranker for path evidence.
-4. **Evaluation:** more questions written by people, human calibration of the judge.
-5. **Product:** a timeline filter on ownership edges (data is already there); EU-hosted or local models for
-   confidential documents.
-6. **DevOps:** multi-stage Dockerfiles, a Jenkins pipeline (lint, tests, build, retrieval-only eval smoke test
-   via `eval.run --retrieval-only --limit`), Kubernetes manifests, and scheduled re-ingestion with Airflow.
+- Leave out the reranker in graph mode, or replace it.
+- Answer "list all..." questions with a graph query, and route each question to the mode that suits it.
+- A second extraction pass for chunks with few relations, plus a measured extraction recall.
+- A timeline slider in the explorer (the years are already in the data).
+- Docker images for the whole app, CI, and scheduled re-ingestion.
 
-## Layout
+## Project layout
 
 | Path | Contents |
 |---|---|
-| `backend/` | Python: config, LLM client, ingestion, retrieval, answering, API, tests |
-| `frontend/` | React + TypeScript + Cytoscape explorer |
+| `backend/` | Python: config, LLM client, ingestion, retrieval, answering, FastAPI app, tests |
+| `frontend/` | React + TypeScript + Cytoscape.js explorer |
 | `eval/` | question sets, judge, runner, results |
-| `slides/` | presentation plan and beamer deck |
-| `scripts/` | data download, demo warm-up |
-| `prototype/` | throwaway Streamlit prototype |
-| `data/raw/`, `data/aliases.yaml` | corpus (committed), curated entity aliases |
-| `NOTES.md`, `docs/INTERVIEW_NOTES.md` | concepts and decisions in detail; one-page interview cheat sheet |
+| `data/raw/`, `data/aliases.yaml` | the article texts, and the hand-checked name merges |
+| `scripts/` | download the articles again, pre-cache demo answers |
+| `docs/`, `NOTES.md` | diagram, explanations of every concept and design decision |
+| `slides/` | presentation (English and German) |
+| `prototype/` | early Streamlit prototype |
 
-## Data attribution
+## Data and license
 
-Documents in `data/raw/` are excerpts of English Wikipedia articles, licensed
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Source URLs and revision ids are
-in `data/raw/sources.json`.
+The texts in `data/raw/` are excerpts of English Wikipedia articles, licensed
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Source URLs and revision ids are in
+`data/raw/sources.json`.
