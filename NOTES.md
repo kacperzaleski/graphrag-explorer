@@ -358,8 +358,8 @@ CLI: `python -m backend.pipeline "How is ÖGB connected to GoldenTree?" --mode g
   - **Relevance ordering**: neighbours are added in order of how well the chunks behind the connecting
     edge matched the question (their RRF score). When the limit cuts, it cuts the least relevant neighbours,
     not random ones.
-  - **Hub control**: entities with degree > 25 (e.g. "Austria", "ECB") can appear in the subgraph but
-    are **not expanded through**. Otherwise one hop via "Austria" connects everything to everything. This is
+  - **Hub control**: LOCATION entities (e.g. "Austria") and nodes with degree > `hub_degree` (100, a safety net) can appear
+    in the subgraph but are **not expanded through** (the threshold was 25 at first, see below). Otherwise one hop via "Austria" connects everything to everything. This is
     the graph version of **stop words**: very frequent nodes carry little information.
 - Why one `RELATES` relationship type helps here: `-[:RELATES*..4]-` is one pattern. With 9 relationship types
   you'd write `[:OWNS|ACQUIRED|...*..4]`.

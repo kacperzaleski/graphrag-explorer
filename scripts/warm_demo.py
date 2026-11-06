@@ -23,6 +23,10 @@ DEMO = [
     ("Which Munich-based bank bought the shares of the shareholder Konsum after it went "
      "bankrupt in 1995?", "graph"),
     ("How is Česká spořitelna connected to Slovenská Sporiteľňa?", "graph"),
+    ("Which bank merged on October 1, 2005, with the postal savings bank that was owned by the "
+     "Austrian Post Office?", "graph"),
+    ("Which American company did BAWAG buy the piano manufacturer Bösendorfer from in 2001?",
+     "graph"),
 ]
 
 

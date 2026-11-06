@@ -141,7 +141,7 @@
 %-------------------------------------------------------------
 \begin{frame}{Discovery features}
   \begin{itemize}
-    \item \hl{Time and stake on edges}: a second, targeted LLM pass (15 calls, 204 edges)\\
+    \item \hl{Time and stake on edges}: a second, targeted LLM pass (15 calls, about 200 edges)\\
       \small BayernLB 46\% (1995) $\rightarrow$ ÖGB 100\% (2004) $\rightarrow$ Cerberus 90\% (2006) $\rightarrow$ GoldenTree 21.8\%
     \item \hl{Graph analytics} at ingest (networkx):
       \begin{itemize}\small
@@ -222,7 +222,7 @@
   \vspace{6pt}
   \begin{itemize}\small
     \item Difference +0.06 [$-$0.12, +0.25]: \hl{hypothesis not supported}
-    \item The reranker hurts connection questions most (0.81 $\rightarrow$ 0.56)
+    \item The reranker hurts connection questions most (vector recall 0.81 $\rightarrow$ 0.56)
     \item Regression check on the old 28: nothing broke (graph 0.93 vs vector 0.91)
     \item Two judges agree on 51/56 + 13/16 answers, Cohen's $\kappa$ = 0.62 / 0.69
   \end{itemize}
