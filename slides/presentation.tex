@@ -21,7 +21,7 @@
 \newcommand{\story}[1]{\par\vspace{6pt}\small\textcolor{softred}{\textbf{What went wrong:}} #1}
 
 \title{GraphRAG Explorer}
-\subtitle{Discovering how Austrian banks, owners and regulators are connected}
+\subtitle{Who owns whom in Austrian banking, and how do you find out?}
 \author{Kacper Zaleski}
 \date{}
 
@@ -33,24 +33,24 @@
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{The goal}
+\begin{frame}{What I wanted to build}
   \begin{itemize}
-    \item A \hl{runnable app} where people \hl{visually explore} facts and connections they did not know
-    \item From documents to a knowledge graph to an explorer UI, end to end
-    \item Every fact \hl{traceable to its source passage}
-    \item Plus the honest question: does the graph make \hl{answers} better than plain RAG?
+    \item An app where you can \hl{click through} how banks, owners and regulators are linked,
+          and stumble on things you didn't know
+    \item Every fact comes with \hl{the sentence it was taken from}
+    \item And one honest question: does the graph actually give \hl{better answers} than plain RAG?
   \end{itemize}
   \vspace{8pt}
   \small
   \begin{tabular}{ll}
-    Corpus & 22 Wikipedia articles: Austrian banks, owners, regulators \\
+    Data & 22 Wikipedia articles about Austrian banks \\
     Stack & Python, FastAPI, Neo4j, React + Cytoscape.js, Docker \\
-    LLMs & Gemini (free tier), switchable: Groq, Cerebras, Mistral \\
+    LLMs & Gemini free tier; Groq, Cerebras or Mistral with one setting \\
   \end{tabular}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Architecture}
+\begin{frame}{How it fits together}
   \centering
   \begin{tikzpicture}[
       box/.style={draw=midblue, rounded corners, fill=midblue!8, minimum width=2.0cm,
@@ -58,12 +58,12 @@
       arr/.style={-{Stealth}, midblue, thick}, node distance=0.45cm, scale=0.95, transform shape]
     \node[box] (docs) {22 articles};
     \node[box, right=of docs] (chunks) {157 chunks\\+ embeddings};
-    \node[box, right=of chunks] (extract) {LLM extraction\\+ validation};
-    \node[box, right=of extract] (resolve) {entity\\resolution};
-    \node[box, right=of resolve] (neo) {Neo4j\\graph + vectors};
+    \node[box, right=of chunks] (extract) {LLM pulls out\\entities + links};
+    \node[box, right=of extract] (resolve) {merge\\duplicates};
+    \node[box, right=of resolve] (neo) {Neo4j};
     \node[box, below=0.8cm of neo] (api) {FastAPI};
-    \node[box, left=of api] (retr) {hybrid + graph\\retrieval};
-    \node[box, left=of retr] (llm) {LLM answer\\+ citations};
+    \node[box, left=of api] (retr) {find passages\\+ graph paths};
+    \node[box, left=of retr] (llm) {answer with\\sources};
     \node[box, below=0.6cm of api] (ui) {React explorer};
     \draw[arr] (docs) -- (chunks); \draw[arr] (chunks) -- (extract);
     \draw[arr] (extract) -- (resolve); \draw[arr] (resolve) -- (neo);
@@ -72,21 +72,21 @@
   \end{tikzpicture}
   \vspace{10pt}
   \begin{itemize}\small
-    \item Ingestion is \hl{idempotent and cached}: a re-run makes 0 API calls
-    \item Result: \hl{726 entities, 585 relations}, every edge knows its source chunks
+    \item The result: \hl{726 entities and 585 links}, each one pointing back to its source text
+    \item Running the import again costs nothing: every LLM call is cached
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Live demo}
+\begin{frame}{Let me show you}
   \begin{columns}[T]
     \begin{column}{0.5\textwidth}
       \small
       \begin{enumerate}
-        \item Insights: influential owners, communities
-        \item Entity card: BAWAG's ownership history
-        \item Connect: ÖGB $\leftrightarrow$ GoldenTree
-        \item Connect: Refco $\leftrightarrow$ Cerberus
+        \item Where to start: the biggest owners and groups
+        \item BAWAG: who owned it, when, and how much
+        \item How is ÖGB linked to GoldenTree?
+        \item How is Refco linked to Cerberus?
         \item Ask: \emph{Who have been the owners of BAWAG over time?}
         \item Ask: \emph{How is BayernLB connected to Addiko Bank?}
       \end{enumerate}
@@ -98,191 +98,191 @@
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Extraction: the LLM proposes, code verifies}
+\begin{frame}{Turning text into a graph}
   \begin{itemize}
-    \item One LLM call per chunk, \hl{Pydantic schema} as structured output
-    \item Closed type lists: 8 entity types, 9 relation types
-    \item One \hl{canonical direction}: ``A is a subsidiary of B'' becomes \texttt{B OWNS A}
-    \item Each item validated on its own: one bad relation does not drop the chunk
-    \item \hl{Grounding check}: the evidence quote must be supported by the chunk
+    \item The LLM reads each chunk and fills in a \hl{fixed form}: who's mentioned, how they're linked
+    \item Only 8 kinds of things and 9 kinds of links, so the output stays comparable
+    \item ``A is a subsidiary of B'' and ``B owns A'' end up as \hl{the same link}
+    \item The LLM has to \hl{quote its evidence}, and the code checks the quote is really in the text
+    \item One bad link gets dropped, not the whole chunk
   \end{itemize}
-  \story{exact-substring grounding rejected 73 relations, \textasciitilde70 of them valid
-    (quotes with ``\ldots''). Word-level support: 1 left, and it still catches
-    the model dropping umlauts (``\"Osterreichische'' $\rightarrow$ ``sterr ischische'').}
+  \story{my first check wanted the exact quote and threw away 73 links. About 70 of them were
+    fine, the model had just shortened the quote with ``\ldots''. Checking word by word fixed it,
+    and it still catches the model mangling umlauts (``\"Osterreichische'' $\rightarrow$ ``sterr ischische'').}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Entity resolution: false merges are worse than splits}
+\begin{frame}{Is ``ÖGB'' the same as ``Austrian Trade Union Federation''?}
   \begin{itemize}
-    \item Normalise: case, accents, \texttt{\"o}$\rightarrow$\texttt{oe}, legal suffixes (AG, GmbH, a.s.)
-    \item Then a \hl{curated alias file}: every merge is explicit and reviewable
-    \item Type by majority vote (the LLM says BANK once, COMPANY once)
-    \item In a bank, merging two ``Raiffeisen \ldots'' would \hl{invent ownership}
+    \item Simple rules first: case, accents, \texttt{\"o}$\rightarrow$\texttt{oe}, ``AG'', ``GmbH'' and so on
+    \item Everything else goes in a \hl{short alias list that a person checked}
+    \item When in doubt, I \hl{keep things apart}: wrongly merging two Raiffeisen banks
+          would invent an owner that doesn't exist
   \end{itemize}
-  \story{the key chain ÖGB $\rightarrow$ BAWAG $\leftarrow$ Cerberus was broken: the LLM wrote
-    ``Cerberus'' and ``ÖGB'' in one chunk, full names in others. Also: ``Ceberus'' is a typo
-    in Wikipedia itself.}
+  \story{the most important chain, ÖGB $\rightarrow$ BAWAG $\leftarrow$ Cerberus, was broken
+    because the LLM sometimes wrote the short names and sometimes the long ones.
+    Fun fact: Wikipedia itself spells it ``Ceberus'' once.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Retrieval: graph mode}
+\begin{frame}{Answering a question with the graph}
   \begin{enumerate}
-    \item \hl{Hybrid search}: vector + fulltext, fused with Reciprocal Rank Fusion (ranks, not scores)
-    \item \hl{Seeds}: entities whose names are covered by the question
-    \item \hl{Paths} between seeds, then breadth-first expansion with a node limit
-    \item Places are never stepping stones (``both are in Vienna'')
-    \item Chunks behind the edges + reranker; \hl{each path edge keeps a slot} for its evidence
-    \item Answer with citations; code removes citations of unseen passages
+    \item Search the text two ways, by meaning and by keywords, and \hl{combine the rankings}
+    \item Spot the banks and companies the question names
+    \item Find the \hl{shortest path} between them, then look around their neighbourhood
+    \item Skip places: ``both are in Vienna'' isn't a useful connection
+    \item Pick the best passages, and \hl{always keep the ones} that prove the path
+    \item Answer with sources. If the model cites something it never saw, the code removes it
   \end{enumerate}
-  \story{degree-based hub filtering blocked the main banks: here the high-degree nodes
-    \emph{are} the answer. Type (location) was the right signal.}
+  \story{I first blocked very connected nodes so paths wouldn't go through hubs. But here the
+    well-connected banks \emph{are} the answer. Skipping places was what actually worked.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Discovery features}
+\begin{frame}{What makes exploring interesting}
   \begin{itemize}
-    \item \hl{Time and stake on edges}: a second, targeted LLM pass (15 calls, about 200 edges)\\
+    \item \hl{When and how much}: a second LLM pass adds years and stakes to about 200 ownership links\\
       \small BayernLB 46\% (1995) $\rightarrow$ ÖGB 100\% (2004) $\rightarrow$ Cerberus 90\% (2006) $\rightarrow$ GoldenTree 21.8\%
-    \item \hl{Graph analytics} at ingest (networkx):
+    \item \hl{Where to start} when you know nothing:
       \begin{itemize}\small
-        \item PageRank over reversed ownership: who controls the most
-        \item Betweenness: bridges between groups (ECB, BAWAG)
-        \item Louvain communities: Erste + CEE banks, UniCredit + Bank Austria, \ldots
+        \item Who owns the most (PageRank over ownership)
+        \item Who connects otherwise separate groups (ECB, BAWAG)
+        \item Which banks belong together (Erste with its CEE banks, UniCredit with Bank Austria)
       \end{itemize}
-    \item Path finder without LLM: instant and free
+    \item Finding a path needs no LLM, so it's instant and free
   \end{itemize}
-  \story{``SIA'' was a top-5 owner. ``UniCredit sold its \emph{card business} to SIA'' had become
-    \texttt{SIA ACQUIRED UniCredit}. One wrong edge distorted a global metric.}
+  \story{a card-payments company called SIA showed up as one of the five biggest owners.
+    ``UniCredit sold its card business to SIA'' had been read as ``SIA bought UniCredit''.
+    One wrong link was enough to throw off the whole ranking.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Engineering for unreliable free-tier APIs}
+\begin{frame}{Living with free-tier APIs}
   \begin{itemize}
-    \item Timeouts, retries with backoff, client-side \hl{rate limiter}
-    \item \hl{Fallback chain} of models on 503 and on quota errors
-    \item \hl{Content-addressed cache}: re-runs are free and reproducible
-    \item All-or-nothing writes: a failed run writes nothing and resumes from the cache
-    \item API: lifespan-managed resources, dependency injection, request ids, liveness vs readiness
+    \item APIs were slow, overloaded or out of quota, often
+    \item So: timeouts, retries, my own \hl{rate limiter}, and a \hl{backup model} when one fails
+    \item Every answer is \hl{cached}: re-runs are free and give the same result
+    \item If an import fails halfway, nothing is written, and the next run picks up where it stopped
   \end{itemize}
-  \story{\texttt{gemini-3.5-flash} allows \hl{20 requests per day}; ingestion needs 160.
-    The free tier also counts every text in an embedding batch as one request.}
+  \story{the model I wanted allows \hl{20 requests a day}. The import needs 160.
+    And for embeddings, each text in a batch counts as its own request.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Evaluation design}
+\begin{frame}{How I tested it}
   \begin{itemize}
-    \item 28 questions: 13 multi-hop, 10 lookup, 5 corpus-wide
-    \item Built from the \hl{text, not the graph}: otherwise graph mode is graded on its own data
-    \item Metrics: recall@8, complete@8, LLM judge, entity recall, latency, tokens
-    \item Judge from \hl{another vendor} (Groq) than the answers (Gemini): self-preference bias
-    \item \hl{Paired} statistics: bootstrap CIs, McNemar, Wilcoxon
-    \item Judge reliability: second judge (Qwen), Cohen's $\kappa$
+    \item 28 questions: 13 that need several steps, 10 simple lookups, 5 about the whole collection
+    \item Questions written from the \hl{articles, not from the graph}, so the graph can't grade itself
+    \item An LLM grades the answers, but \hl{from a different company} than the one answering,
+          since models tend to like their own style
+    \item A second grader checks the first one
+    \item Both modes answer the \hl{same questions}, so I compare them question by question
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Round 1 (original prompt): no measurable difference}
+\begin{frame}{Round 1: a tie}
   \centering
   \begin{tabular}{lcc}
     \toprule
-    & vector & graph \\
+    & plain RAG & graph \\
     \midrule
-    judge score & 0.91 [0.80, 0.98] & 0.91 [0.84, 0.98] \\
+    score [95\% CI] & 0.91 [0.80, 0.98] & 0.91 [0.84, 0.98] \\
     correct & 24/28 & 23/28 \\
-    recall@8 & 0.90 & 0.89 \\
-    LLM latency p50 / tokens & 1.7\,s / 2.8k & 2.5\,s / 3.4k \\
+    right passages found (recall@8) & 0.90 & 0.89 \\
+    answer time / tokens & 1.7\,s / 2.8k & 2.5\,s / 3.4k \\
     \bottomrule
   \end{tabular}
   \vspace{8pt}
   \begin{itemize}\small
-    \item Difference +0.00 [$-$0.05, +0.05], McNemar p = 1.0
-    \item \hl{Ceiling effect}: generated questions name their entities, vector finds both passages
-    \item Both modes fail on \hl{corpus-wide} questions: top-k cannot collect an aggregation
+    \item No difference at all (+0.00, McNemar p = 1.0)
+    \item The questions were \hl{too easy}: they name everything, so plain search finds it too
+    \item Both fail on ``list all \ldots'' questions: 8 passages can't hold a full list
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Round 2: a pre-registered hard test}
+\begin{frame}{Round 2: harder questions, prediction written down first}
   \begin{itemize}\small
-    \item Hypothesis written \hl{before} running: graph wins on connection questions
-    \item 8 questions ``How is A connected to C?'', the bridge named nowhere
-    \item Prompt fix evaluated only on these new questions: \hl{no tuning on the test set}
+    \item My bet, \hl{written down before running}: the graph wins when the link in between is never named
+    \item 8 questions like ``How is A connected to C?''
+    \item I didn't touch anything after seeing the results
   \end{itemize}
   \centering\small
   \begin{tabular}{lcc}
     \toprule
-    & vector & graph \\
+    & plain RAG & graph \\
     \midrule
-    judge score & 0.38 & 0.44 \\
+    score & 0.38 & 0.44 \\
     correct & 3/8 & 2/8 \\
-    recall@8 & 0.56 & 0.50 \\
-    recall@8 \hl{without reranker} & \hl{0.81} & 0.56 \\
+    right passages found & 0.56 & 0.50 \\
+    \ldots\ \hl{without the reranker} & \hl{0.81} & 0.56 \\
     \bottomrule
   \end{tabular}
   \vspace{6pt}
   \begin{itemize}\small
-    \item Difference +0.06 [$-$0.12, +0.25]: \hl{hypothesis not supported}
-    \item The reranker hurts connection questions most (vector recall 0.81 $\rightarrow$ 0.56)
-    \item Regression check on the old 28: nothing broke (graph 0.93 vs vector 0.91)
-    \item Two judges agree on 51/56 + 13/16 answers, Cohen's $\kappa$ = 0.62 / 0.69
+    \item +0.06, but anywhere from $-$0.12 to +0.25: \hl{my bet didn't hold up}
+    \item The biggest effect was a surprise: the \hl{reranker throws away} the passages plain RAG needs
+    \item The original 28 still work (graph 0.93, plain RAG 0.91), and the two graders agree
+          on 64 of 72 answers ($\kappa$ = 0.62 / 0.69)
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{What I learned}
+\begin{frame}{What I took away}
   \begin{columns}[T]
     \begin{column}{0.48\textwidth}
-      \hl{Where the graph helps}
+      \hl{Where the graph is worth it}
       \begin{itemize}\small
-        \item Exploration: paths, neighbourhoods, rankings
-        \item Explainability: every edge has a source quote
-        \item Structure: time and stake on ownership
-        \item Errors become visible (SIA, Cerberus)
+        \item Exploring: paths, neighbours, rankings
+        \item Trust: every link shows where it came from
+        \item Time and stakes on ownership
+        \item Mistakes are easy to see (SIA, Cerberus)
       \end{itemize}
     \end{column}
     \begin{column}{0.48\textwidth}
-      \hl{Where it does not (yet)}
+      \hl{Where it isn't (yet)}
       \begin{itemize}\small
-        \item QA accuracy on a small, clean corpus
-        \item Missing extractions cap it: ``Addiko was spun off from Hypo'' never became an edge
-        \item Global questions need graph queries, not top-k
+        \item Better answers on a small, clean set of articles
+        \item It only knows what was extracted: ``Addiko was spun off from Hypo'' never made it in
+        \item ``List all\ldots'' needs a graph query, not a search
       \end{itemize}
     \end{column}
   \end{columns}
   \vspace{10pt}
   \centering\small
-  A negative result, measured honestly, is still a result.
+  ``No difference'' is a real result, as long as it's measured properly.
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Next steps}
+\begin{frame}{What I'd do next}
   \begin{itemize}
-    \item Drop or replace the reranker for graph mode (it is trained on web search queries)
-    \item Aggregation mode for corpus-wide questions (graph query instead of top-k)
-    \item Better extraction recall: a second pass on chunks with few relations
-    \item Timeline filter in the explorer (the data is already there)
-    \item In a bank: self-hosted or EU-hosted models, Snowflake as the document source,
-          Airflow for scheduled re-ingestion
+    \item Drop the reranker in graph mode (it was trained on web searches, not on questions like these)
+    \item Answer ``list all\ldots'' questions with a graph query instead of a search
+    \item Read chunks with few links a second time, to miss fewer facts
+    \item A timeline slider in the explorer (the years are already in the data)
+    \item In a bank: models hosted in the EU or in-house, Snowflake as the source,
+          Airflow to re-import on a schedule
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
 \begin{frame}
   \centering
-  \Large Thank you. Questions?
+  \Large Thanks! Questions?
   \vspace{12pt}
 
-  \small Code, evaluation and notes: \texttt{graphRAG-demo} repository
+  \small Code, evaluation and notes are in the \texttt{graphRAG-demo} repository
 \end{frame}
 
 %-------------------------------------------------------------
 \appendix
-\begin{frame}{Backup: Ask with highlighted path}
+\begin{frame}{Backup: an answer with its path highlighted}
   \centering
   \includegraphics[width=0.85\linewidth]{img/4_ask.png}
 \end{frame}
 
-\begin{frame}{Backup: path finder}
+\begin{frame}{Backup: finding a path}
   \centering
   \includegraphics[width=0.85\linewidth]{img/3_path.png}
 \end{frame}

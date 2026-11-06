@@ -22,7 +22,7 @@
 \newcommand{\story}[1]{\par\vspace{6pt}\small\textcolor{softred}{\textbf{Was schiefging:}} #1}
 
 \title{GraphRAG Explorer}
-\subtitle{Wie österreichische Banken, Eigentümer und Aufsichtsbehörden zusammenhängen}
+\subtitle{Wem gehört was im österreichischen Bankwesen, und wie findet man das heraus?}
 \author{Kacper Zaleski}
 \date{}
 
@@ -34,37 +34,37 @@
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Das Ziel}
+\begin{frame}{Was ich bauen wollte}
   \begin{itemize}
-    \item Eine \hl{lauffähige App}, in der man Fakten und Zusammenhänge \hl{visuell entdeckt}, die man nicht kannte
-    \item Von Dokumenten über einen Knowledge Graph bis zur Explorer-UI, durchgängig
-    \item Jeder Fakt ist \hl{bis zur Quellpassage nachvollziehbar}
-    \item Und die ehrliche Frage: Macht der Graph die \hl{Antworten} besser als einfaches RAG?
+    \item Eine App, in der man sich \hl{durchklicken} kann, wie Banken, Eigentümer und Aufsicht
+          zusammenhängen, und dabei auf Dinge stößt, die man nicht wusste
+    \item Zu jedem Fakt gibt es \hl{den Satz, aus dem er stammt}
+    \item Und eine ehrliche Frage: Liefert der Graph wirklich \hl{bessere Antworten} als normales RAG?
   \end{itemize}
   \vspace{8pt}
   \small
   \begin{tabular}{ll}
-    Korpus & 22 Wikipedia-Artikel: österreichische Banken, Eigentümer, Aufsicht \\
+    Daten & 22 Wikipedia-Artikel über österreichische Banken \\
     Stack & Python, FastAPI, Neo4j, React + Cytoscape.js, Docker \\
-    LLMs & Gemini (Free Tier), umschaltbar: Groq, Cerebras, Mistral \\
+    LLMs & Gemini (kostenlos); Groq, Cerebras oder Mistral mit einer Einstellung \\
   \end{tabular}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Architektur}
+\begin{frame}{So hängt alles zusammen}
   \centering
   \begin{tikzpicture}[
       box/.style={draw=midblue, rounded corners, fill=midblue!8, minimum width=2.0cm,
                   minimum height=0.9cm, align=center, font=\small},
       arr/.style={-{Stealth}, midblue, thick}, node distance=0.45cm, scale=0.95, transform shape]
     \node[box] (docs) {22 Artikel};
-    \node[box, right=of docs] (chunks) {157 Chunks\\+ Embeddings};
-    \node[box, right=of chunks] (extract) {LLM-Extraktion\\+ Validierung};
-    \node[box, right=of extract] (resolve) {Entity\\Resolution};
-    \node[box, right=of resolve] (neo) {Neo4j\\Graph + Vektoren};
+    \node[box, right=of docs] (chunks) {157 Abschnitte\\+ Embeddings};
+    \node[box, right=of chunks] (extract) {LLM findet\\Firmen + Bezüge};
+    \node[box, right=of extract] (resolve) {Duplikate\\zusammenführen};
+    \node[box, right=of resolve] (neo) {Neo4j};
     \node[box, below=0.8cm of neo] (api) {FastAPI};
-    \node[box, left=of api] (retr) {Hybrid- + Graph-\\Retrieval};
-    \node[box, left=of retr] (llm) {LLM-Antwort\\+ Zitate};
+    \node[box, left=of api] (retr) {Passagen suchen\\+ Graph-Pfade};
+    \node[box, left=of retr] (llm) {Antwort mit\\Quellen};
     \node[box, below=0.6cm of api] (ui) {React-Explorer};
     \draw[arr] (docs) -- (chunks); \draw[arr] (chunks) -- (extract);
     \draw[arr] (extract) -- (resolve); \draw[arr] (resolve) -- (neo);
@@ -73,23 +73,23 @@
   \end{tikzpicture}
   \vspace{10pt}
   \begin{itemize}\small
-    \item Die Ingestion ist \hl{idempotent und gecacht}: ein erneuter Lauf macht 0 API-Calls
-    \item Ergebnis: \hl{726 Entitäten, 585 Relationen}, jede Kante kennt ihre Quell-Chunks
+    \item Ergebnis: \hl{726 Einträge und 585 Verbindungen}, jede mit Verweis auf ihre Textquelle
+    \item Ein zweiter Import kostet nichts: jeder LLM-Aufruf wird zwischengespeichert
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Live-Demo}
+\begin{frame}{Ich zeig's Ihnen}
   \begin{columns}[T]
     \begin{column}{0.5\textwidth}
       \small
       \begin{enumerate}
-        \item Insights: einflussreiche Eigentümer, Communities
-        \item Entitätskarte: Eigentümergeschichte der BAWAG
-        \item Connect: ÖGB $\leftrightarrow$ GoldenTree
-        \item Connect: Refco $\leftrightarrow$ Cerberus
-        \item Ask: \emph{Who have been the owners of BAWAG over time?}
-        \item Ask: \emph{How is BayernLB connected to Addiko Bank?}
+        \item Wo anfangen: die größten Eigentümer und Gruppen
+        \item BAWAG: wem sie gehörte, wann und zu wie viel
+        \item Wie hängt der ÖGB mit GoldenTree zusammen?
+        \item Wie hängt Refco mit Cerberus zusammen?
+        \item Frage: \emph{Who have been the owners of BAWAG over time?}
+        \item Frage: \emph{How is BayernLB connected to Addiko Bank?}
       \end{enumerate}
     \end{column}
     \begin{column}{0.5\textwidth}
@@ -99,191 +99,195 @@
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Extraktion: das LLM schlägt vor, der Code prüft}
+\begin{frame}{Vom Text zum Graphen}
   \begin{itemize}
-    \item Ein LLM-Call pro Chunk, \hl{Pydantic-Schema} als Structured Output
-    \item Feste Typlisten: 8 Entitätstypen, 9 Relationstypen
-    \item Eine \hl{kanonische Richtung}: „A ist Tochter von B“ wird zu \texttt{B OWNS A}
-    \item Jedes Element wird einzeln validiert: eine fehlerhafte Relation verwirft nicht den ganzen Chunk
-    \item \hl{Grounding-Check}: das Belegzitat muss vom Chunk gestützt sein
+    \item Das LLM liest jeden Abschnitt und füllt ein \hl{festes Formular} aus: wer kommt vor, wie hängen sie zusammen
+    \item Nur 8 Arten von Einträgen und 9 Arten von Verbindungen, damit alles vergleichbar bleibt
+    \item „A ist eine Tochter von B“ und „B besitzt A“ werden \hl{dieselbe Verbindung}
+    \item Das LLM muss \hl{seinen Beleg zitieren}, und der Code prüft, ob das Zitat wirklich im Text steht
+    \item Eine falsche Verbindung fliegt raus, nicht gleich der ganze Abschnitt
   \end{itemize}
-  \story{Exaktes Substring-Grounding verwarf 73 Relationen, davon \textasciitilde70 korrekte
-    (Zitate mit „\ldots“). Mit Wort-Abdeckung bleibt 1 übrig, und es erkennt trotzdem,
-    wenn das Modell Umlaute verschluckt („\"Osterreichische“ $\rightarrow$ „sterr ischische“).}
+  \story{Meine erste Prüfung wollte das Zitat wortwörtlich und hat 73 Verbindungen verworfen.
+    Rund 70 davon waren richtig, das Modell hatte das Zitat nur mit „\ldots“ gekürzt. Wort für Wort
+    prüfen hat's gelöst, und verschluckte Umlaute fallen trotzdem auf
+    („\"Osterreichische“ $\rightarrow$ „sterr ischische“).}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Entity Resolution: falsche Merges sind schlimmer als Splits}
+\begin{frame}{Ist „ÖGB“ dasselbe wie „Austrian Trade Union Federation“?}
   \begin{itemize}
-    \item Normalisieren: Groß-/Kleinschreibung, Akzente, \texttt{\"o}$\rightarrow$\texttt{oe}, Rechtsformen (AG, GmbH, a.s.)
-    \item Danach eine \hl{kuratierte Alias-Datei}: jeder Merge ist explizit und prüfbar
-    \item Typ per Mehrheitsentscheid (das LLM sagt einmal BANK, einmal COMPANY)
-    \item In einer Bank würde ein Merge zweier „Raiffeisen \ldots“ \hl{Eigentum erfinden}
+    \item Zuerst einfache Regeln: Groß-/Kleinschreibung, Akzente, \texttt{\"o}$\rightarrow$\texttt{oe}, „AG“, „GmbH“ usw.
+    \item Der Rest kommt in eine \hl{kurze Alias-Liste, die ein Mensch geprüft hat}
+    \item Im Zweifel \hl{lieber getrennt lassen}: zwei Raiffeisenbanken fälschlich zusammenzulegen
+          würde einen Eigentümer erfinden, den es nicht gibt
   \end{itemize}
-  \story{Die Kette ÖGB $\rightarrow$ BAWAG $\leftarrow$ Cerberus war unterbrochen: das LLM schrieb
-    in einem Chunk „Cerberus“ und „ÖGB“, in anderen die vollen Namen. Außerdem ist
-    „Ceberus“ ein Tippfehler in Wikipedia selbst.}
+  \story{Die wichtigste Kette, ÖGB $\rightarrow$ BAWAG $\leftarrow$ Cerberus, war unterbrochen,
+    weil das LLM mal die Kurz- und mal die Langnamen geschrieben hat.
+    Kleines Detail am Rande: Wikipedia selbst schreibt einmal „Ceberus“.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Retrieval: Graph-Modus}
+\begin{frame}{Eine Frage mit dem Graphen beantworten}
   \begin{enumerate}
-    \item \hl{Hybride Suche}: Vektor + Volltext, fusioniert mit Reciprocal Rank Fusion (Ränge statt Scores)
-    \item \hl{Seeds}: Entitäten, deren Namen in der Frage vorkommen
-    \item \hl{Pfade} zwischen den Seeds, dann Breitensuche mit Knotenlimit
-    \item Orte sind nie Zwischenschritte („beide sitzen in Wien“)
-    \item Chunks hinter den Kanten + Reranker; \hl{jede Pfadkante hat einen reservierten Platz} für ihren Beleg
-    \item Antwort mit Zitaten; der Code entfernt Zitate von Passagen, die das Modell nicht gesehen hat
+    \item Den Text auf zwei Arten durchsuchen, nach Bedeutung und nach Stichworten, und
+          \hl{die Ranglisten kombinieren}
+    \item Erkennen, welche Banken und Firmen in der Frage vorkommen
+    \item Den \hl{kürzesten Weg} zwischen ihnen finden, dann ihre Nachbarschaft anschauen
+    \item Orte überspringen: „beide sitzen in Wien“ ist keine brauchbare Verbindung
+    \item Die besten Passagen auswählen und \hl{immer die behalten}, die den Weg belegen
+    \item Mit Quellen antworten. Zitiert das Modell etwas, das es nie gesehen hat, entfernt der Code es
   \end{enumerate}
-  \story{Ein Hub-Filter nach Knotengrad blockierte die wichtigsten Banken: hier \emph{sind}
-    die Knoten mit hohem Grad die Antwort. Der Typ (Ort) war das richtige Signal.}
+  \story{Zuerst habe ich stark vernetzte Knoten gesperrt, damit Wege nicht über Knotenpunkte laufen.
+    Aber hier \emph{sind} die gut vernetzten Banken die Antwort. Funktioniert hat, Orte zu überspringen.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Funktionen zum Entdecken}
+\begin{frame}{Was das Entdecken spannend macht}
   \begin{itemize}
-    \item \hl{Zeit und Anteil an den Kanten}: ein zweiter, gezielter LLM-Durchlauf (15 Calls, rund 200 Kanten)\\
+    \item \hl{Wann und wie viel}: ein zweiter LLM-Durchlauf ergänzt Jahre und Anteile bei rund 200 Eigentumsverbindungen\\
       \small BayernLB 46\,\% (1995) $\rightarrow$ ÖGB 100\,\% (2004) $\rightarrow$ Cerberus 90\,\% (2006) $\rightarrow$ GoldenTree 21,8\,\%
-    \item \hl{Graph-Analytik} bei der Ingestion (networkx):
+    \item \hl{Wo anfangen}, wenn man nichts weiß:
       \begin{itemize}\small
-        \item PageRank über umgekehrte Eigentumskanten: wer kontrolliert am meisten
-        \item Betweenness: Brücken zwischen Gruppen (EZB, BAWAG)
-        \item Louvain-Communities: Erste + CEE-Banken, UniCredit + Bank Austria, \ldots
+        \item Wem gehört am meisten (PageRank über die Eigentumsverhältnisse)
+        \item Wer verbindet sonst getrennte Gruppen (EZB, BAWAG)
+        \item Welche Banken zusammengehören (Erste mit ihren CEE-Banken, UniCredit mit Bank Austria)
       \end{itemize}
-    \item Pfadsuche ohne LLM: sofort und kostenlos
+    \item Wege finden braucht kein LLM, geht also sofort und kostet nichts
   \end{itemize}
-  \story{„SIA“ war unter den Top-5-Eigentümern. Aus ``UniCredit verkaufte ihr \emph{Kartengeschäft}
-    an SIA'' war \texttt{SIA ACQUIRED UniCredit} geworden. Eine falsche Kante verzerrte eine globale Kennzahl.}
+  \story{Ein Kartenzahlungs-Anbieter namens SIA tauchte unter den fünf größten Eigentümern auf.
+    Aus „UniCredit verkaufte ihr Kartengeschäft an SIA“ war „SIA kaufte UniCredit“ geworden.
+    Eine einzige falsche Verbindung hat das ganze Ranking verzerrt.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Engineering für unzuverlässige Free-Tier-APIs}
+\begin{frame}{Leben mit kostenlosen APIs}
   \begin{itemize}
-    \item Timeouts, Retries mit Backoff, clientseitiger \hl{Rate Limiter}
-    \item \hl{Fallback-Kette} von Modellen bei 503 und bei Quota-Fehlern
-    \item \hl{Inhaltsadressierter Cache}: erneute Läufe sind kostenlos und reproduzierbar
-    \item Alles-oder-nichts-Schreiben: ein fehlgeschlagener Lauf schreibt nichts und setzt aus dem Cache fort
-    \item API: Ressourcen über Lifespan, Dependency Injection, Request-IDs, Liveness vs.\ Readiness
+    \item Die APIs waren oft langsam, überlastet oder das Kontingent war aufgebraucht
+    \item Deshalb: Timeouts, Wiederholungen, ein eigener \hl{Rate Limiter} und ein
+          \hl{Ersatzmodell}, wenn eins ausfällt
+    \item Jede Antwort wird \hl{zwischengespeichert}: Wiederholungen sind gratis und liefern dasselbe
+    \item Bricht ein Import mittendrin ab, wird nichts geschrieben, und der nächste Lauf macht dort weiter
   \end{itemize}
-  \story{\texttt{gemini-3.5-flash} erlaubt \hl{20 Requests pro Tag}, die Ingestion braucht 160.
-    Außerdem zählt der Free Tier jeden Text in einem Embedding-Batch als eigenen Request.}
+  \story{Das Modell, das ich wollte, erlaubt \hl{20 Anfragen pro Tag}. Der Import braucht 160.
+    Und bei Embeddings zählt jeder Text in einem Batch als eigene Anfrage.}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Evaluationsdesign}
+\begin{frame}{Wie ich es getestet habe}
   \begin{itemize}
-    \item 28 Fragen: 13 Multi-Hop, 10 Lookup, 5 korpusweite
-    \item Erstellt aus dem \hl{Text, nicht aus dem Graphen}: sonst würde der Graph-Modus an seinen eigenen Daten gemessen
-    \item Metriken: Recall@8, Complete@8, LLM-Judge, Entity Recall, Latenz, Tokens
-    \item Judge von einem \hl{anderen Anbieter} (Groq) als die Antworten (Gemini): Self-Preference-Bias
-    \item \hl{Gepaarte} Statistik: Bootstrap-Konfidenzintervalle, McNemar, Wilcoxon
-    \item Reliabilität des Judges: zweiter Judge (Qwen), Cohens $\kappa$
+    \item 28 Fragen: 13 mit mehreren Schritten, 10 einfache Nachschlagefragen, 5 über alle Artikel hinweg
+    \item Fragen aus den \hl{Artikeln geschrieben, nicht aus dem Graphen}, sonst bewertet sich der Graph selbst
+    \item Ein LLM bewertet die Antworten, aber \hl{von einem anderen Anbieter} als das antwortende,
+          weil Modelle ihren eigenen Stil gern mögen
+    \item Ein zweiter Bewerter kontrolliert den ersten
+    \item Beide Modi beantworten \hl{dieselben Fragen}, ich vergleiche also Frage für Frage
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Runde 1 (ursprünglicher Prompt): kein messbarer Unterschied}
+\begin{frame}{Runde 1: unentschieden}
   \centering
   \begin{tabular}{lcc}
     \toprule
-    & Vektor & Graph \\
+    & normales RAG & Graph \\
     \midrule
-    Judge-Score & 0,91 [0,80; 0,98] & 0,91 [0,84; 0,98] \\
-    korrekt & 24/28 & 23/28 \\
-    Recall@8 & 0,90 & 0,89 \\
-    LLM-Latenz p50 / Tokens & 1,7\,s / 2,8k & 2,5\,s / 3,4k \\
+    Score [95\,\%-KI] & 0,91 [0,80; 0,98] & 0,91 [0,84; 0,98] \\
+    richtig & 24/28 & 23/28 \\
+    richtige Passagen gefunden (Recall@8) & 0,90 & 0,89 \\
+    Antwortzeit / Tokens & 1,7\,s / 2,8k & 2,5\,s / 3,4k \\
     \bottomrule
   \end{tabular}
   \vspace{8pt}
   \begin{itemize}\small
-    \item Differenz +0,00 [$-$0,05; +0,05], McNemar p = 1,0
-    \item \hl{Deckeneffekt}: generierte Fragen nennen ihre Entitäten, die Vektorsuche findet beide Passagen
-    \item Beide Modi scheitern an \hl{korpusweiten} Fragen: Top-k kann keine Aggregation einsammeln
+    \item Überhaupt kein Unterschied (+0,00, McNemar p = 1,0)
+    \item Die Fragen waren \hl{zu leicht}: sie nennen alles beim Namen, also findet es auch die normale Suche
+    \item Beide scheitern an „Nenne alle \ldots“-Fragen: in 8 Passagen passt keine vollständige Liste
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Runde 2: ein vorab registrierter, schwerer Test}
+\begin{frame}{Runde 2: schwerere Fragen, Vorhersage vorher aufgeschrieben}
   \begin{itemize}\small
-    \item Hypothese \hl{vor} dem Lauf festgelegt: der Graph gewinnt bei Verbindungsfragen
-    \item 8 Fragen „How is A connected to C?“, die Brücke wird nirgends genannt
-    \item Prompt-Fix nur auf diesen neuen Fragen evaluiert: \hl{kein Tuning auf dem Testset}
+    \item Meine Wette, \hl{vor dem Lauf aufgeschrieben}: der Graph gewinnt, wenn das Zwischenglied nie genannt wird
+    \item 8 Fragen wie „How is A connected to C?“
+    \item Nach den Ergebnissen habe ich nichts mehr verändert
   \end{itemize}
   \centering\small
   \begin{tabular}{lcc}
     \toprule
-    & Vektor & Graph \\
+    & normales RAG & Graph \\
     \midrule
-    Judge-Score & 0,38 & 0,44 \\
-    korrekt & 3/8 & 2/8 \\
-    Recall@8 & 0,56 & 0,50 \\
-    Recall@8 \hl{ohne Reranker} & \hl{0,81} & 0,56 \\
+    Score & 0,38 & 0,44 \\
+    richtig & 3/8 & 2/8 \\
+    richtige Passagen gefunden & 0,56 & 0,50 \\
+    \ldots\ \hl{ohne Reranker} & \hl{0,81} & 0,56 \\
     \bottomrule
   \end{tabular}
   \vspace{6pt}
   \begin{itemize}\small
-    \item Differenz +0,06 [$-$0,12; +0,25]: \hl{Hypothese nicht bestätigt}
-    \item Der Reranker schadet Verbindungsfragen am meisten (Vektor-Recall 0,81 $\rightarrow$ 0,56)
-    \item Regressionscheck auf den alten 28: nichts kaputt (Graph 0,93 vs.\ Vektor 0,91)
-    \item Zwei Judges stimmen bei 51/56 + 13/16 Antworten überein, Cohens $\kappa$ = 0,62 / 0,69
+    \item +0,06, aber irgendwo zwischen $-$0,12 und +0,25: \hl{meine Wette ging nicht auf}
+    \item Der größte Effekt war eine Überraschung: der \hl{Reranker wirft genau die Passagen weg},
+          die normales RAG braucht
+    \item Die ursprünglichen 28 funktionieren weiter (Graph 0,93, normales RAG 0,91), und die beiden
+          Bewerter sind sich bei 64 von 72 Antworten einig ($\kappa$ = 0,62 / 0,69)
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Was ich gelernt habe}
+\begin{frame}{Was ich mitnehme}
   \begin{columns}[T]
     \begin{column}{0.48\textwidth}
-      \hl{Wo der Graph hilft}
+      \hl{Wo sich der Graph lohnt}
       \begin{itemize}\small
-        \item Exploration: Pfade, Nachbarschaften, Rankings
-        \item Erklärbarkeit: jede Kante hat ein Quellzitat
-        \item Struktur: Zeit und Anteil bei Eigentum
-        \item Fehler werden sichtbar (SIA, Cerberus)
+        \item Erkunden: Wege, Nachbarn, Rankings
+        \item Vertrauen: jede Verbindung zeigt, woher sie kommt
+        \item Zeit und Anteile bei Eigentum
+        \item Fehler sieht man sofort (SIA, Cerberus)
       \end{itemize}
     \end{column}
     \begin{column}{0.48\textwidth}
       \hl{Wo (noch) nicht}
       \begin{itemize}\small
-        \item QA-Genauigkeit auf einem kleinen, sauberen Korpus
-        \item Fehlende Extraktionen begrenzen ihn: „Addiko wurde aus der Hypo abgespalten“ wurde nie zur Kante
-        \item Globale Fragen brauchen Graph-Abfragen, nicht Top-k
+        \item Bessere Antworten bei wenigen, sauberen Artikeln
+        \item Er weiß nur, was extrahiert wurde: „Addiko wurde aus der Hypo abgespalten“ ist nie angekommen
+        \item „Nenne alle\ldots“ braucht eine Graph-Abfrage, keine Suche
       \end{itemize}
     \end{column}
   \end{columns}
   \vspace{10pt}
   \centering\small
-  Ein ehrlich gemessenes negatives Ergebnis ist auch ein Ergebnis.
+  „Kein Unterschied“ ist auch ein Ergebnis, wenn man es sauber gemessen hat.
 \end{frame}
 
 %-------------------------------------------------------------
-\begin{frame}{Nächste Schritte}
+\begin{frame}{Was ich als Nächstes machen würde}
   \begin{itemize}
-    \item Reranker im Graph-Modus weglassen oder ersetzen (er ist auf Web-Suchanfragen trainiert)
-    \item Aggregationsmodus für korpusweite Fragen (Graph-Abfrage statt Top-k)
-    \item Höherer Recall bei der Extraktion: zweiter Durchlauf für Chunks mit wenigen Relationen
-    \item Zeitleisten-Filter im Explorer (die Daten sind schon da)
-    \item In einer Bank: selbst gehostete oder in der EU gehostete Modelle, Snowflake als Dokumentquelle,
-          Airflow für geplante Re-Ingestion
+    \item Den Reranker im Graph-Modus weglassen (er wurde auf Websuchen trainiert, nicht auf solche Fragen)
+    \item „Nenne alle\ldots“-Fragen mit einer Graph-Abfrage beantworten statt mit einer Suche
+    \item Abschnitte mit wenigen Verbindungen ein zweites Mal lesen, damit weniger Fakten verloren gehen
+    \item Ein Zeitregler im Explorer (die Jahre sind schon in den Daten)
+    \item In einer Bank: Modelle in der EU oder im eigenen Haus, Snowflake als Quelle,
+          Airflow für regelmäßige Importe
   \end{itemize}
 \end{frame}
 
 %-------------------------------------------------------------
 \begin{frame}
   \centering
-  \Large Danke. Fragen?
+  \Large Danke! Fragen?
   \vspace{12pt}
 
-  \small Code, Evaluation und Notizen: Repository \texttt{graphRAG-demo}
+  \small Code, Evaluation und Notizen liegen im Repository \texttt{graphRAG-demo}
 \end{frame}
 
 %-------------------------------------------------------------
 \appendix
-\begin{frame}{Backup: Ask mit hervorgehobenem Pfad}
+\begin{frame}{Backup: eine Antwort mit hervorgehobenem Weg}
   \centering
   \includegraphics[width=0.85\linewidth]{img/4_ask.png}
 \end{frame}
 
-\begin{frame}{Backup: Pfadsuche}
+\begin{frame}{Backup: einen Weg finden}
   \centering
   \includegraphics[width=0.85\linewidth]{img/3_path.png}
 \end{frame}
