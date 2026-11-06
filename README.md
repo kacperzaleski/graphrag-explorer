@@ -68,7 +68,7 @@ RELATED_TO. The current graph has 726 entities and 585 relations.
 [Gemini API key](https://aistudio.google.com/apikey).
 
 ```bash
-git clone <this repo> && cd graphRAG-demo
+git clone https://github.com/kacperzaleski/graphrag-explorer.git && cd graphrag-explorer
 cp .env.example .env                    # then put your GEMINI_API_KEY in .env
 uv sync                                 # Python 3.12 environment and dependencies
 docker compose up -d neo4j              # Neo4j 5, browser at http://localhost:7474
@@ -184,8 +184,8 @@ was written down before the run:
 | `slides/` | presentation (English and German) |
 | `prototype/` | early Streamlit prototype |
 
-## Data and license
+## License
 
-The texts in `data/raw/` are excerpts of English Wikipedia articles, licensed
+The code is MIT licensed (see `LICENSE`). The texts in `data/raw/` are excerpts of English Wikipedia articles, licensed
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Source URLs and revision ids are in
 `data/raw/sources.json`.
